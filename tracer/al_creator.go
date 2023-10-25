@@ -16,7 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-func CreateRWAL(db *state.StateDB, args TransactionArgs, header *types.Header) *accesslist.RW_AccessLists {
+func CreateRWAL(db *state.StateDB, args TransactionArgs, header *types.Header, isCopied bool) *accesslist.RW_AccessLists {
 	from := args.from()
 	to := args.to()
 	isCreate := false
@@ -65,7 +65,12 @@ func CreateRWAL(db *state.StateDB, args TransactionArgs, header *types.Header) *
 
 	for {
 		RWAL := prevTracer.RWAccessList()
-		statedb := db.Copy()
+		var statedb *state.StateDB
+		if !isCopied {
+			statedb = db.Copy()
+		} else {
+			statedb = db
+		}
 
 		args.AccessList = RWAL.ToJSON()
 		msg, err := args.ToMessage(1000000000000000, header.BaseFee) // 没有设置globalGasCap
@@ -89,4 +94,13 @@ func CreateRWAL(db *state.StateDB, args TransactionArgs, header *types.Header) *
 		}
 		prevTracer = tracer
 	}
+}
+
+func CreateRWALWithTransactions(db *state.StateDB, args []TransactionArgs, header *types.Header) []*accesslist.RW_AccessLists {
+	dbCopy := db.Copy()
+	ret := make([]*accesslist.RW_AccessLists, len(args))
+	for _, tx := range args {
+		ret = append(ret, CreateRWAL(dbCopy, tx, header, true))
+	}
+	return ret
 }

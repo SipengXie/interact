@@ -7,6 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/node"
@@ -38,15 +39,8 @@ func GetEthDatabaseAndStateDatabase() (ethdb.Database, state.Database) {
 	return chainDB, sdbBackend
 }
 
-func main() {
-	chainDB, sdbBackend := GetEthDatabaseAndStateDatabase()
-	head := rawdb.ReadHeadBlockHash(chainDB)
-	num := *rawdb.ReadHeaderNumber(chainDB, head)
-	headBlock := rawdb.ReadBlock(chainDB, head, num)
-	tx := headBlock.Transactions()[1]
-	fmt.Println(tx.Hash())
-
-	txArgs := tracer.NewTransactionArgs(headBlock.Transactions()[1])
+func PredictRWAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend state.Database, num uint64) {
+	txArgs := tracer.NewTransactionArgs(tx)
 
 	baseHead := rawdb.ReadCanonicalHash(chainDB, num-1)
 	baseHeader := rawdb.ReadHeader(chainDB, baseHead, num-1)
@@ -56,31 +50,43 @@ func main() {
 		panic(err)
 	}
 
-	list := tracer.CreateRWAL(state, txArgs, baseHeader)
+	list := tracer.CreateRWAL(state, txArgs, baseHeader, false)
 	listJSON := list.ToJSON()
 	b := common.Hex2Bytes(listJSON)
+	fmt.Println("Tx Hash is:", tx.Hash())
 	fmt.Println(string(b))
+}
 
-	// fmt.Println("Highest block: ", num)
+func PredictRWALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend state.Database, num uint64) {
+	args := make([]tracer.TransactionArgs, len(txs))
+	for i, tx := range txs {
+		args[i] = tracer.NewTransactionArgs(tx)
+	}
+	baseHead := rawdb.ReadCanonicalHash(chainDB, num-1)
+	baseHeader := rawdb.ReadHeader(chainDB, baseHead, num-1)
 
-	// for {
-	// 	bh := rawdb.ReadCanonicalHash(chainDB, num)
-	// 	b := rawdb.ReadBlock(chainDB, bh, num)
-	// 	_, err := sdbBackend.OpenTrie(b.Root())
-	// 	if err != nil {
-	// 		break
-	// 	}
-	// 	num--
-	// }
-	// fmt.Println("First Block Without State: ", num)
+	state, err := state.New(baseHeader.Root, sdbBackend, nil)
+	if err != nil {
+		panic(err)
+	}
 
-	// headBlock := rawdb.ReadHeadBlock(chainDB)
-	// stateDB, err := state.New(headBlock.Root(), sdbBackend, nil)
-	// if err != nil {
-	// 	panic(err)
-	// }
+	lists := tracer.CreateRWALWithTransactions(state, args, baseHeader)
+	for id, list := range lists {
+		listJSON := list.ToJSON()
+		b := common.Hex2Bytes(listJSON)
+		fmt.Println("Tx Hash is:", txs[id].Hash())
+		fmt.Println("RWAL is:", string(b))
+	}
+}
 
-	// address := common.HexToAddress("a85C921965A38d98D35ED63BA55eef4F57428E67")
-	// balance := stateDB.GetBalance(address)
-	// fmt.Println(balance)
+func main() {
+	chainDB, sdbBackend := GetEthDatabaseAndStateDatabase()
+	head := rawdb.ReadHeadBlockHash(chainDB)
+	num := *rawdb.ReadHeaderNumber(chainDB, head)
+	headBlock := rawdb.ReadBlock(chainDB, head, num)
+	txs := headBlock.Transactions()
+	// PredictRWALs(txs, chainDB, sdbBackend, num)
+
+	tx := txs[1]
+	PredictRWAL(tx, chainDB, sdbBackend, num)
 }
