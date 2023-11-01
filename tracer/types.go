@@ -36,20 +36,20 @@ type TransactionArgs struct {
 }
 
 func NewTransactionArgs(tx *types.Transaction) TransactionArgs {
-	from, _ := types.Sender(types.LatestSigner(params.TestChainConfig), tx)
+	from, _ := types.Sender(types.LatestSigner(params.MainnetChainConfig), tx)
 	return TransactionArgs{
-		From:     from.Hex(),
-		To:       tx.To().Hex(),
-		Gas:      tx.Gas(),
-		GasPrice: tx.GasPrice().String(),
-		// MaxFeePerGas:         tx.GasFeeCap().String(),
-		// MaxPriorityFeePerGas: tx.GasTipCap().String(),
-		Value:      tx.Value().String(),
-		Nonce:      tx.Nonce(),
-		Data:       common.Bytes2Hex(tx.Data()),
-		Input:      common.Bytes2Hex(tx.Data()),
-		AccessList: "",
-		ChainID:    "",
+		From: from.Hex(),
+		To:   tx.To().Hex(),
+		Gas:  tx.Gas(),
+		// GasPrice: tx.GasPrice().String(),
+		MaxFeePerGas:         tx.GasFeeCap().String(),
+		MaxPriorityFeePerGas: tx.GasTipCap().String(),
+		Value:                tx.Value().String(),
+		Nonce:                tx.Nonce(),
+		Data:                 common.Bytes2Hex(tx.Data()),
+		Input:                common.Bytes2Hex(tx.Data()),
+		AccessList:           "",
+		ChainID:              "",
 	}
 }
 
@@ -75,6 +75,9 @@ func (txargs TransactionArgs) gasPrice() *big.Int {
 
 func (txargs TransactionArgs) salt() *uint256.Int {
 	res := new(uint256.Int)
+	if txargs.Salt == "" {
+		return nil
+	}
 	res.SetFromHex(txargs.Salt)
 	return res
 }
@@ -137,12 +140,10 @@ func (args *TransactionArgs) ToMessage(globalGasCap uint64, baseFee *big.Int) (*
 			if args.MaxFeePerGas != "" {
 				gasFeeCap, _ = gasFeeCap.SetString(args.MaxFeePerGas, 10)
 			}
-			log.Info("gasFeeCap is:", gasFeeCap, "argMaxFeePerGas is:", args.MaxFeePerGas)
 			gasTipCap = new(big.Int)
 			if args.MaxPriorityFeePerGas != "" {
 				gasTipCap, _ = gasTipCap.SetString(args.MaxPriorityFeePerGas, 10)
 			}
-			log.Info("gasTipCap is:", gasTipCap, "argsMaxPriorityFeePerGas is:", args.MaxPriorityFeePerGas)
 			// Backfill the legacy gasPrice for EVM execution, unless we're all zeroes
 			gasPrice = new(big.Int)
 			if gasFeeCap.BitLen() > 0 || gasTipCap.BitLen() > 0 {
@@ -170,7 +171,7 @@ func (args *TransactionArgs) ToMessage(globalGasCap uint64, baseFee *big.Int) (*
 		Data:              data,
 		RWAccessList:      *RWAccessList,
 		Salt:              args.salt(),
-		SkipAccountChecks: true,
+		SkipAccountChecks: false,
 	}
 	return msg, nil
 }

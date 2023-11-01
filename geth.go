@@ -2,11 +2,11 @@ package main
 
 import (
 	"fmt"
+	"interact/accesslist"
 	"interact/tracer"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/core/state"
+	statedb "github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -15,7 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/trie/triedb/pathdb"
 )
 
-func GetEthDatabaseAndStateDatabase() (ethdb.Database, state.Database) {
+func GetEthDatabaseAndStateDatabase() (*node.Node, ethdb.Database, statedb.Database) {
 	nodeCfg := node.Config{DataDir: "/mnt/disk1/xsp/chaindata/execution/"}
 	Node, err := node.New(&nodeCfg)
 	if err != nil {
@@ -35,58 +35,110 @@ func GetEthDatabaseAndStateDatabase() (ethdb.Database, state.Database) {
 	}
 
 	trieDB := trie.NewDatabase(chainDB, config)
-	sdbBackend := state.NewDatabaseWithNodeDB(chainDB, trieDB)
-	return chainDB, sdbBackend
+	sdbBackend := statedb.NewDatabaseWithNodeDB(chainDB, trieDB)
+	return Node, chainDB, sdbBackend
 }
 
-func PredictRWAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend state.Database, num uint64) {
-	txArgs := tracer.NewTransactionArgs(tx)
+func PredictRWAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) *accesslist.RW_AccessLists {
 
-	baseHead := rawdb.ReadCanonicalHash(chainDB, num-1)
-	baseHeader := rawdb.ReadHeader(chainDB, baseHead, num-1)
+	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
+	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
 
-	state, err := state.New(baseHeader.Root, sdbBackend, nil)
+	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
 	if err != nil {
 		panic(err)
 	}
 
-	list := tracer.CreateRWAL(state, txArgs, baseHeader, false)
-	listJSON := list.ToJSON()
-	b := common.Hex2Bytes(listJSON)
-	fmt.Println("Tx Hash is:", tx.Hash())
-	fmt.Println(string(b))
+	headHash := rawdb.ReadCanonicalHash(chainDB, num)
+	header := rawdb.ReadHeader(chainDB, headHash, num)
+	list, _ := tracer.CreateRWAL(state, tx, header)
+	// listJSON := list.ToJSON()
+	// b := common.Hex2Bytes(listJSON)
+	// fmt.Println("Tx Hash is:", tx.Hash())
+	// fmt.Println(string(b))
+
+	return list
 }
 
-func PredictRWALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend state.Database, num uint64) {
-	args := make([]tracer.TransactionArgs, len(txs))
-	for i, tx := range txs {
-		args[i] = tracer.NewTransactionArgs(tx)
-	}
-	baseHead := rawdb.ReadCanonicalHash(chainDB, num-1)
-	baseHeader := rawdb.ReadHeader(chainDB, baseHead, num-1)
+func TrueRWALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) []*accesslist.RW_AccessLists {
+	fmt.Println("Staring Run True RWALs")
+	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
+	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
 
-	state, err := state.New(baseHeader.Root, sdbBackend, nil)
+	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
 	if err != nil {
 		panic(err)
 	}
 
-	lists := tracer.CreateRWALWithTransactions(state, args, baseHeader)
-	for id, list := range lists {
-		listJSON := list.ToJSON()
-		b := common.Hex2Bytes(listJSON)
-		fmt.Println("Tx Hash is:", txs[id].Hash())
-		fmt.Println("RWAL is:", string(b))
-	}
+	headHash := rawdb.ReadCanonicalHash(chainDB, num)
+	header := rawdb.ReadHeader(chainDB, headHash, num)
+
+	lists := tracer.CreateRWALWithTransactions(state, txs, header)
+	// file, err := os.Create("RWSet")
+	// if err != nil {
+	// 	fmt.Println("Open file err =", err)
+	// 	return
+	// }
+	// defer file.Close()
+	// for id, list := range lists {
+	// 	listJSON := list.ToJSON()
+	// 	b := common.Hex2Bytes(listJSON)
+	// 	_, err := file.WriteString("{" + `"` + txs[id].Hash().String() + `"` + ":" + string(b) + "}\n")
+	// 	if err != nil {
+	// 		fmt.Println("Write file err =", err)
+	// 		return
+	// 	}
+	// }
+	fmt.Println("Finishing Run True RWALs")
+	return lists
 }
 
 func main() {
-	chainDB, sdbBackend := GetEthDatabaseAndStateDatabase()
+	Node, chainDB, sdbBackend := GetEthDatabaseAndStateDatabase()
+	defer Node.Close()
+
 	head := rawdb.ReadHeadBlockHash(chainDB)
 	num := *rawdb.ReadHeaderNumber(chainDB, head)
+	fmt.Println("Block Height:", num)
 	headBlock := rawdb.ReadBlock(chainDB, head, num)
 	txs := headBlock.Transactions()
-	// PredictRWALs(txs, chainDB, sdbBackend, num)
+	trueLists := TrueRWALs(txs, chainDB, sdbBackend, num)
+	// Node.Close()
 
-	tx := txs[1]
-	PredictRWAL(tx, chainDB, sdbBackend, num)
+	// Node, chainDB, sdbBackend = GetEthDatabaseAndStateDatabase()
+	predictLists := make([]*accesslist.RW_AccessLists, txs.Len())
+	fmt.Println("Staring Run Predicting RWALs")
+	for i, tx := range txs {
+		fmt.Printf("Starting Predicting Tx[%d]\n", i)
+		predictLists[i] = PredictRWAL(tx, chainDB, sdbBackend, num)
+	}
+	fmt.Println("Finishing Run Predicting RWALs")
+
+	conflictCounter := 0
+	nilCounter := 0
+	conflictTxs := make([]int, 0)
+	for i, list := range trueLists {
+		if predictLists[i] == nil {
+			nilCounter++
+			continue
+		}
+		if !list.Equal(*predictLists[i]) {
+			conflictCounter++
+			conflictTxs = append(conflictTxs, i)
+		}
+	}
+	fmt.Println("Nil Prediction Number:", nilCounter)
+	fmt.Println("False Prediction Number:", conflictCounter)
+	// fmt.Println("False Predicted Transactions:")
+	// for _, i := range conflictTxs {
+	// 	fmt.Println(txs[i].Hash())
+	// 	listJson := predictLists[i].ToJSON()
+	// 	b := common.Hex2Bytes(listJson)
+	// 	fmt.Println("Predicted RW Sets:", string(b))
+
+	// 	listJson = trueLists[i].ToJSON()
+	// 	b = common.Hex2Bytes(listJson)
+	// 	fmt.Println("True RW Sets:", string(b))
+	// }
+	// TODO:预测冲突率、实际冲突率实现
 }
