@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"interact/accesslist"
+	conflictgraph "interact/conflictGraph"
 	"interact/tracer"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -141,4 +142,28 @@ func main() {
 	// 	fmt.Println("True RW Sets:", string(b))
 	// }
 	// TODO:预测冲突率、实际冲突率实现
+
+	vertices := make([]*conflictgraph.Vertex, txs.Len())
+	undiConfGraph := conflictgraph.NewUndirectedGraph()
+	for i, tx := range txs {
+		vertices[i] = &conflictgraph.Vertex{
+			TxId:   i,
+			TxHash: tx.Hash(),
+		}
+		undiConfGraph.AddVertex(vertices[i])
+	}
+
+	for i := 0; i < txs.Len(); i++ {
+		for j := i + 1; j < txs.Len(); j++ {
+			if predictLists[i].HasConflict(*predictLists[j]) {
+				undiConfGraph.AddEdge(vertices[i], vertices[j])
+			}
+		}
+	}
+
+	groups := undiConfGraph.GetConnectedComponents()
+	fmt.Println("Number of Groups:", len(groups))
+	for i := 0; i < len(groups); i++ {
+		fmt.Printf("Number of Group[%d]:%d\n", i, len(groups[i]))
+	}
 }
