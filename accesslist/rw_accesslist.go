@@ -15,12 +15,12 @@ var (
 	ALIVE    = common.Hash(sha256.Sum256([]byte("alive")))
 )
 
-type byte52 [52]byte
+type Byte52 [52]byte
 
-type ALTuple map[byte52]struct{}
+type ALTuple map[Byte52]struct{}
 
-func Combine(addr common.Address, hash common.Hash) byte52 {
-	var key byte52
+func Combine(addr common.Address, hash common.Hash) Byte52 {
+	var key Byte52
 	copy(key[:], addr[:])
 	copy(key[20:], hash[:])
 	return key
@@ -34,7 +34,7 @@ func (tuple ALTuple) Add(addr common.Address, hash common.Hash) {
 	tuple[key] = struct{}{}
 }
 
-func (tuple ALTuple) Contains(key byte52) bool {
+func (tuple ALTuple) Contains(key Byte52) bool {
 	_, ok := tuple[key]
 	return ok
 }
