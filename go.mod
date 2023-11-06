@@ -3,6 +3,7 @@ module interact
 go 1.20
 
 require (
+	github.com/deckarep/golang-set v1.8.0
 	github.com/ethereum/go-ethereum v1.13.3
 	github.com/holiman/uint256 v1.2.3
 )
@@ -12,7 +13,6 @@ require (
 	github.com/Microsoft/go-winio v0.6.1 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
 	github.com/VictoriaMetrics/fastcache v1.6.0 // indirect
-	github.com/alphadose/haxmap v1.3.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.5.0 // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.2.0 // indirect
@@ -27,7 +27,7 @@ require (
 	github.com/consensys/gnark-crypto v0.10.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.2 // indirect
 	github.com/crate-crypto/go-kzg-4844 v0.3.0 // indirect
-	github.com/deckarep/golang-set/v2 v2.1.0 // indirect
+	github.com/deckarep/golang-set/v2 v2.3.1 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1 // indirect
 	github.com/ethereum/c-kzg-4844 v0.3.1 // indirect
 	github.com/fjl/memsize v0.0.0-20190710130421-bcb5799ab5e5 // indirect
