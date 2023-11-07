@@ -3,6 +3,7 @@ package cachestate
 import (
 	"fmt"
 	"math/big"
+	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -25,18 +26,30 @@ import (
 // Or use a overrall KVS, but we need to support thread safe snapshot and revert,
 // and under this circumstance, we don't need to force commit phase and execution phase to happen in turn.
 
-// CacheState for APEX+
+type revision struct {
+	id           int
+	journalIndex int
+}
+
+// CacheState for APEX & APEX+
 type CacheState struct {
 	Accounts map[common.Address]*accountObject `json:"accounts,omitempty"`
-	Logs     map[common.Hash][]*types.Log      `json:"logs,omitempty"`
-	thash    common.Hash
-	txIndex  int
-	logSize  uint
+
+	Logs    map[common.Hash][]*types.Log `json:"logs,omitempty"`
+	thash   common.Hash
+	txIndex int
+	logSize uint
+
+	Journal        *journal `json:"journal,omitempty"`
+	ValidRevisions []revision
+	NextRevisionId int
 }
 
 func NewStateDB() *CacheState {
 	return &CacheState{
 		Accounts: make(map[common.Address]*accountObject),
+		Journal:  newJournal(),
+		Logs:     make(map[common.Hash][]*types.Log),
 	}
 }
 
@@ -67,8 +80,10 @@ func (accSt *CacheState) getOrsetAccountObject(addr common.Address) *accountObje
 func (accSt *CacheState) CreateAccount(addr common.Address) {
 
 	if accSt.getAccountObject(addr) != nil {
+		// 我们忽略addr冲突的情况
 		return
 	}
+	accSt.Journal.append(createObjectChange{&addr})
 	obj := newAccountObject(addr, accountData{})
 	accSt.setAccountObject(obj)
 }
@@ -77,6 +92,7 @@ func (accSt *CacheState) CreateAccount(addr common.Address) {
 func (accSt *CacheState) SubBalance(addr common.Address, amount *big.Int) {
 	stateObject := accSt.getOrsetAccountObject(addr)
 	if stateObject != nil {
+		accSt.Journal.append(balanceChange{&addr, stateObject.Data.Balance})
 		stateObject.SubBalance(amount)
 	}
 }
@@ -85,11 +101,12 @@ func (accSt *CacheState) SubBalance(addr common.Address, amount *big.Int) {
 func (accSt *CacheState) AddBalance(addr common.Address, amount *big.Int) {
 	stateObject := accSt.getOrsetAccountObject(addr)
 	if stateObject != nil {
+		accSt.Journal.append(balanceChange{&addr, stateObject.Data.Balance})
 		stateObject.AddBalance(amount)
 	}
 }
 
-// // GetBalance 获取某个账户的余额
+// GetBalance 获取某个账户的余额
 func (accSt *CacheState) GetBalance(addr common.Address) *big.Int {
 	stateObject := accSt.getOrsetAccountObject(addr)
 	if stateObject != nil {
@@ -111,6 +128,7 @@ func (accSt *CacheState) GetNonce(addr common.Address) uint64 {
 func (accSt *CacheState) SetNonce(addr common.Address, nonce uint64) {
 	stateObject := accSt.getOrsetAccountObject(addr)
 	if stateObject != nil {
+		accSt.Journal.append(nonceChange{&addr, stateObject.Data.Nonce})
 		stateObject.SetNonce(nonce)
 	}
 }
@@ -137,6 +155,7 @@ func (accSt *CacheState) GetCode(addr common.Address) []byte {
 func (accSt *CacheState) SetCode(addr common.Address, code []byte) {
 	stateObject := accSt.getOrsetAccountObject(addr)
 	if stateObject != nil {
+		accSt.Journal.append(codeChange{&addr, stateObject.ByteCode, stateObject.Data.CodeHash.Bytes()})
 		stateObject.SetCode(crypto.Keccak256Hash(code), code)
 	}
 }
@@ -183,7 +202,8 @@ func (accSt *CacheState) GetState(addr common.Address, key common.Hash) common.H
 func (accSt *CacheState) SetState(addr common.Address, key common.Hash, value common.Hash) {
 	stateObject := accSt.getOrsetAccountObject(addr)
 	if stateObject != nil {
-		fmt.Printf("SetState key: %x value: %s", key, new(big.Int).SetBytes(value[:]).String())
+		// fmt.Printf("SetState key: %x value: %s", key, new(big.Int).SetBytes(value[:]).String())
+		accSt.Journal.append(storageChange{&addr, key, stateObject.GetStorageState(key)})
 		stateObject.SetStorageState(key, value)
 	}
 }
@@ -206,7 +226,13 @@ func (accSt *CacheState) SelfDestruct(addr common.Address) {
 	if stateObject == nil {
 		return
 	}
+	accSt.Journal.append(selfDestructChange{
+		account:     &addr,
+		prev:        stateObject.IsAlive,
+		prevbalance: stateObject.Data.Balance,
+	})
 	stateObject.IsAlive = false
+	stateObject.Data.Balance = new(big.Int)
 }
 
 // HasSuicided ...
@@ -247,12 +273,27 @@ func (accSt *CacheState) SlotInAccessList(addr common.Address, slot common.Hash)
 }
 
 // RevertToSnapshot ...
-func (accSt *CacheState) RevertToSnapshot(id int) {
+func (accSt *CacheState) RevertToSnapshot(revid int) {
+	// Find the snapshot in the stack of valid snapshots.
+	idx := sort.Search(len(accSt.ValidRevisions), func(i int) bool {
+		return accSt.ValidRevisions[i].id >= revid
+	})
+	if idx == len(accSt.ValidRevisions) || accSt.ValidRevisions[idx].id != revid {
+		panic(fmt.Errorf("revision id %v cannot be reverted", revid))
+	}
+	snapshot := accSt.ValidRevisions[idx].journalIndex
+
+	// Replay the journal to undo changes and remove invalidated snapshots
+	accSt.Journal.revert(accSt, snapshot)
+	accSt.ValidRevisions = accSt.ValidRevisions[:idx]
 }
 
 // Snapshot ...
 func (accSt *CacheState) Snapshot() int {
-	return 0
+	id := accSt.NextRevisionId
+	accSt.NextRevisionId++
+	accSt.ValidRevisions = append(accSt.ValidRevisions, revision{id, accSt.Journal.length()})
+	return id
 }
 
 // AddLog

@@ -45,14 +45,18 @@ func (object *accountObject) SubBalance(amount *big.Int) {
 	if amount.Sign() == 0 {
 		return
 	}
-	object.Data.Balance = new(big.Int).Sub(object.GetBalance(), amount)
+	object.Data.Balance = new(big.Int).Sub(object.Data.Balance, amount)
 }
 
 func (object *accountObject) AddBalance(amount *big.Int) {
 	if amount.Sign() == 0 {
 		return
 	}
-	object.Data.Balance = new(big.Int).Add(object.GetBalance(), amount)
+	object.Data.Balance = new(big.Int).Add(object.Data.Balance, amount)
+}
+
+func (object *accountObject) SetBalance(amount *big.Int) {
+	object.Data.Balance = amount
 }
 
 func (object *accountObject) GetNonce() uint64 {
