@@ -7,6 +7,9 @@ import (
 )
 
 // 一个比较尴尬的事情是这个算法好像不一定是确定性的
+// 不确定性来自于我们Set存储的都是指针，而指针大小是不确定的
+// 且Set的底层是Map，可能造成不一致的Pop；
+// 实际上，我们可以通过修改数据结构以及存储的数据来保证一致性
 
 type VertexStack []*conflictgraph.Vertex
 
@@ -92,6 +95,14 @@ func (s *LinearTime) Solve() {
 
 func (s *LinearTime) deleteVertex(v *conflictgraph.Vertex) {
 	v.IsDeleted = true
+	switch v.Degree {
+	case 1:
+		s.VerticesOne.Remove(v)
+	case 2:
+		s.VerticesTwo.Remove(v)
+	default:
+		s.VerticesGreaterThanThree.Remove(v)
+	}
 	if v.Degree == 0 {
 		return
 	}
@@ -115,7 +126,11 @@ func (s *LinearTime) deleteVertex(v *conflictgraph.Vertex) {
 
 func (s *LinearTime) degreeOneReduction() {
 	v := s.VerticesOne.Pop()
-	s.deleteVertex(v.(*conflictgraph.Vertex))
+	for _, neighbor := range s.Graph.AdjacencyMap[v.(*conflictgraph.Vertex)] {
+		if !neighbor.IsDeleted {
+			s.deleteVertex(neighbor)
+		}
+	}
 }
 
 func (s *LinearTime) inexactReduction() {
@@ -145,17 +160,22 @@ func (s *LinearTime) degreeTwoPathReduction() {
 	} else {
 
 		var v, w *conflictgraph.Vertex = nil, nil
-		for _, neighbor := range s.Graph.AdjacencyMap[path[0]] {
-			if !neighbor.IsDeleted && neighbor.Degree != 2 {
-				v = neighbor
-				break
+		if len(path) == 1 {
+			v = s.Graph.AdjacencyMap[path[0]][0]
+			w = s.Graph.AdjacencyMap[path[0]][1]
+		} else {
+			for _, neighbor := range s.Graph.AdjacencyMap[path[0]] {
+				if !neighbor.IsDeleted && neighbor.Degree != 2 {
+					v = neighbor
+					break
+				}
 			}
-		}
 
-		for _, neighbor := range s.Graph.AdjacencyMap[path[len(path)-1]] {
-			if !neighbor.IsDeleted && neighbor.Degree != 2 {
-				w = neighbor
-				break
+			for _, neighbor := range s.Graph.AdjacencyMap[path[len(path)-1]] {
+				if !neighbor.IsDeleted && neighbor.Degree != 2 {
+					w = neighbor
+					break
+				}
 			}
 		}
 
@@ -199,7 +219,7 @@ func (s *LinearTime) pathReOrg(initPath []*conflictgraph.Vertex) []*conflictgrap
 		if st == nil {
 			for _, neighbor := range s.Graph.AdjacencyMap[v] {
 				if neighbor.Degree != 2 && !neighbor.IsDeleted {
-					st = neighbor
+					st = v
 					break
 				}
 			}
@@ -223,6 +243,9 @@ func (s *LinearTime) findLongestDegreeTwoPath(v *conflictgraph.Vertex) ([]*confl
 				isCycle = false
 				break
 			}
+		}
+		if !isCycle {
+			break
 		}
 	}
 
