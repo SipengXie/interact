@@ -1,6 +1,7 @@
 package mis
 
 import (
+	"fmt"
 	conflictgraph "interact/conflictGraph"
 
 	set "github.com/deckarep/golang-set"
@@ -10,18 +11,19 @@ import (
 // 不确定性来自于我们Set存储的都是指针，而指针大小是不确定的
 // 且Set的底层是Map，可能造成不一致的Pop；
 // 实际上，我们可以通过修改数据结构以及存储的数据来保证一致性
+const MAX_UINT = uint(2147483647)
 
-type VertexStack []*conflictgraph.Vertex
+type VertexStack []uint
 
-func (s *VertexStack) Push(v *conflictgraph.Vertex) {
+func (s *VertexStack) Push(v uint) {
 	*s = append(*s, v)
 }
 
-func (s *VertexStack) Pop() *conflictgraph.Vertex {
+func (s *VertexStack) Pop() uint {
 	old := *s
 	n := len(old)
 	if n == 0 {
-		return nil
+		return MAX_UINT
 	}
 	v := old[n-1]
 	*s = old[0 : n-1]
@@ -31,7 +33,7 @@ func (s *VertexStack) Pop() *conflictgraph.Vertex {
 type LinearTime struct {
 	Graph *conflictgraph.UndirectedGraph
 
-	VerticesOne, VerticesTwo, VerticesGreaterThanThree, IndependentSet set.Set // 存指针
+	VerticesOne, VerticesTwo, VerticesGreaterThanThree, IndependentSet set.Set // 存txID
 
 	Stack VertexStack
 }
@@ -41,19 +43,19 @@ func NewSolution(graph *conflictgraph.UndirectedGraph) *LinearTime {
 	VerticesTwo := set.NewSet()
 	VerticesGreaterThanThree := set.NewSet()
 	IndependentSet := set.NewSet()
-	Stack := make([]*conflictgraph.Vertex, 0)
+	Stack := make([]uint, 0)
 
 	for _, v := range graph.Vertices {
 		switch v.Degree {
 		case 0:
-			IndependentSet.Add(v)
+			IndependentSet.Add(v.TxId)
 			v.IsDeleted = true
 		case 1:
-			VerticesOne.Add(v)
+			VerticesOne.Add(v.TxId)
 		case 2:
-			VerticesTwo.Add(v)
+			VerticesTwo.Add(v.TxId)
 		default:
-			VerticesGreaterThanThree.Add(v)
+			VerticesGreaterThanThree.Add(v.TxId)
 		}
 	}
 
@@ -77,10 +79,11 @@ func (s *LinearTime) Solve() {
 			s.inexactReduction()
 		}
 	}
-	for u := s.Stack.Pop(); u != nil; u = s.Stack.Pop() {
+	for id := s.Stack.Pop(); id != MAX_UINT; id = s.Stack.Pop() {
 		canAdd := true
-		for _, neighbor := range s.Graph.AdjacencyMap[u] {
-			if !neighbor.IsDeleted && !s.IndependentSet.Contains(neighbor) {
+		for _, neighborId := range s.Graph.AdjacencyMap[id] {
+			neighbor := s.Graph.Vertices[neighborId]
+			if !neighbor.IsDeleted && !s.IndependentSet.Contains(neighborId) {
 				continue
 			} else {
 				canAdd = false
@@ -88,92 +91,106 @@ func (s *LinearTime) Solve() {
 			}
 		}
 		if canAdd {
-			s.IndependentSet.Add(u)
+			s.IndependentSet.Add(id)
 		}
 	}
 }
 
-func (s *LinearTime) deleteVertex(v *conflictgraph.Vertex) {
+func (s *LinearTime) deleteVertex(id uint) {
+	v := s.Graph.Vertices[id]
 	v.IsDeleted = true
 	switch v.Degree {
 	case 1:
-		s.VerticesOne.Remove(v)
+		s.VerticesOne.Remove(id)
 	case 2:
-		s.VerticesTwo.Remove(v)
+		s.VerticesTwo.Remove(id)
 	default:
-		s.VerticesGreaterThanThree.Remove(v)
+		s.VerticesGreaterThanThree.Remove(id)
 	}
 	if v.Degree == 0 {
 		return
 	}
-	for _, neighbor := range s.Graph.AdjacencyMap[v] {
+	for _, neighborId := range s.Graph.AdjacencyMap[id] {
+		neighbor := s.Graph.Vertices[neighborId]
 		if !neighbor.IsDeleted {
 			neighbor.Degree--
 			switch neighbor.Degree {
 			case 0:
-				s.IndependentSet.Add(neighbor)
-				s.VerticesOne.Remove(neighbor)
+				s.IndependentSet.Add(neighborId)
+				s.VerticesOne.Remove(neighborId)
 			case 1:
-				s.VerticesOne.Add(neighbor)
-				s.VerticesTwo.Remove(neighbor)
+				s.VerticesOne.Add(neighborId)
+				s.VerticesTwo.Remove(neighborId)
 			case 2:
-				s.VerticesTwo.Add(neighbor)
-				s.VerticesGreaterThanThree.Remove(neighbor)
+				s.VerticesTwo.Add(neighborId)
+				s.VerticesGreaterThanThree.Remove(neighborId)
 			}
 		}
 	}
 }
 
 func (s *LinearTime) degreeOneReduction() {
-	v := s.VerticesOne.Pop()
-	for _, neighbor := range s.Graph.AdjacencyMap[v.(*conflictgraph.Vertex)] {
+	txId := s.VerticesOne.Pop().(uint)
+	for _, neighborId := range s.Graph.AdjacencyMap[txId] {
+		neighbor := s.Graph.Vertices[neighborId]
 		if !neighbor.IsDeleted {
-			s.deleteVertex(neighbor)
+			s.deleteVertex(neighborId)
 		}
 	}
 }
 
 func (s *LinearTime) inexactReduction() {
-	var maxDegree = 0
-	var maxDegreeVertex *conflictgraph.Vertex = nil
+	var maxDegree = uint(0)
+	var maxDegreeId = MAX_UINT
 
-	for _, v := range s.VerticesGreaterThanThree.ToSlice() {
-		vertex := v.(*conflictgraph.Vertex)
+	for _, txId := range s.VerticesGreaterThanThree.ToSlice() {
+		vertex := s.Graph.Vertices[txId.(uint)]
 		if vertex.Degree > maxDegree {
 			maxDegree = vertex.Degree
-			maxDegreeVertex = vertex
+			maxDegreeId = txId.(uint)
 		}
 	}
 
-	if maxDegreeVertex != nil {
-		s.deleteVertex(maxDegreeVertex)
+	if maxDegreeId != MAX_UINT {
+		s.deleteVertex(maxDegreeId)
 	}
 }
 
 func (s *LinearTime) degreeTwoPathReduction() {
-	u := s.VerticesTwo.Pop()
-	path, isCycle := s.findLongestDegreeTwoPath(u.(*conflictgraph.Vertex))
-	path = s.pathReOrg(path)
+	uId := s.VerticesTwo.Pop().(uint)
+	path, isCycle := s.findLongestDegreeTwoPath(uId)
 
 	if isCycle {
-		s.deleteVertex(u.(*conflictgraph.Vertex))
+		s.deleteVertex(uId)
 	} else {
-
-		var v, w *conflictgraph.Vertex = nil, nil
+		path = s.pathReOrg(path)
+		var v, w uint = MAX_UINT, MAX_UINT
 		if len(path) == 1 {
-			v = s.Graph.AdjacencyMap[path[0]][0]
-			w = s.Graph.AdjacencyMap[path[0]][1]
-		} else {
-			for _, neighbor := range s.Graph.AdjacencyMap[path[0]] {
+			for _, neighborId := range s.Graph.AdjacencyMap[path[0].TxId] {
+				neighbor := s.Graph.Vertices[neighborId]
 				if !neighbor.IsDeleted && neighbor.Degree != 2 {
-					v = neighbor
+					if v == MAX_UINT {
+						v = neighbor.TxId
+					} else if w == MAX_UINT {
+						w = neighbor.TxId
+					} else {
+						break
+					}
+				}
+			}
+		} else {
+			for _, neighborId := range s.Graph.AdjacencyMap[path[0].TxId] {
+				neighbor := s.Graph.Vertices[neighborId]
+				if !neighbor.IsDeleted && neighbor.Degree != 2 {
+					v = neighbor.TxId
 					break
 				}
 			}
 
-			for _, neighbor := range s.Graph.AdjacencyMap[path[len(path)-1]] {
+			for _, neighborId := range s.Graph.AdjacencyMap[path[len(path)-1].TxId] {
+				neighbor := s.Graph.Vertices[neighborId]
 				if !neighbor.IsDeleted && neighbor.Degree != 2 {
-					w = neighbor
+					w = neighbor.TxId
 					break
 				}
 			}
@@ -187,58 +204,44 @@ func (s *LinearTime) degreeTwoPathReduction() {
 				s.deleteVertex(w)
 			} else {
 				for i := 1; i < len(path); i++ {
-					s.Graph.RemoveVertex(path[i])
-					s.VerticesTwo.Remove(path[i])
+					s.Graph.RemoveVertex(path[i].TxId)
+					s.VerticesTwo.Remove(path[i].TxId)
 				}
-				s.Graph.AddEdge(path[0], w)
+				s.Graph.AddEdge(path[0].TxId, w)
 				for i := len(path) - 1; i > 0; i-- {
-					s.Stack.Push(path[i])
+					s.Stack.Push(path[i].TxId)
 				}
 			}
 		} else {
-			for _, v := range path {
-				s.Graph.RemoveVertex(v)
-				s.VerticesTwo.Remove(v)
+			for _, vertex := range path {
+				s.Graph.RemoveVertex(vertex.TxId)
+				s.VerticesTwo.Remove(vertex.TxId)
+			}
+			fmt.Println("v:", v)
+			fmt.Println("w:", w)
+			if v == 73 && w == MAX_UINT {
+				fmt.Println("Bingo")
 			}
 			if !s.Graph.HasEdge(v, w) {
 				s.Graph.AddEdge(v, w)
 			}
 			for i := len(path) - 1; i >= 0; i-- {
-				s.Stack.Push(path[i])
+				s.Stack.Push(path[i].TxId)
 			}
 		}
 	}
 }
 
-func (s *LinearTime) pathReOrg(initPath []*conflictgraph.Vertex) []*conflictgraph.Vertex {
-	inPath := make(map[*conflictgraph.Vertex]bool)
-	visited := make(map[*conflictgraph.Vertex]bool)
-	var st *conflictgraph.Vertex = nil
-	for _, v := range initPath {
-		inPath[v] = true
-		if st == nil {
-			for _, neighbor := range s.Graph.AdjacencyMap[v] {
-				if neighbor.Degree != 2 && !neighbor.IsDeleted {
-					st = v
-					break
-				}
-			}
-		}
-	}
-
-	path := make([]*conflictgraph.Vertex, 0)
-	s.dfsToReOrgPath(st, visited, inPath, &path)
-	return path
-}
-
-func (s *LinearTime) findLongestDegreeTwoPath(v *conflictgraph.Vertex) ([]*conflictgraph.Vertex, bool) {
+func (s *LinearTime) findLongestDegreeTwoPath(vId uint) ([]*conflictgraph.Vertex, bool) {
 	visited := make(map[*conflictgraph.Vertex]bool)
 	longestPath := make([]*conflictgraph.Vertex, 0)
 	isCycle := true
 
-	s.dfsToFindDegreeTwoPath(v, visited, &longestPath)
+	s.dfsToFindDegreeTwoPath(vId, visited, &longestPath)
 	for _, vertex := range longestPath {
-		for _, neighbor := range s.Graph.AdjacencyMap[vertex] {
+		vId := vertex.TxId
+		for _, neighborId := range s.Graph.AdjacencyMap[vId] {
+			neighbor := s.Graph.Vertices[neighborId]
 			if !visited[neighbor] && !neighbor.IsDeleted {
 				isCycle = false
 				break
@@ -252,22 +255,48 @@ func (s *LinearTime) findLongestDegreeTwoPath(v *conflictgraph.Vertex) ([]*confl
 	return longestPath, isCycle
 }
 
-func (s *LinearTime) dfsToFindDegreeTwoPath(vertex *conflictgraph.Vertex, visited map[*conflictgraph.Vertex]bool, path *[]*conflictgraph.Vertex) {
+func (s *LinearTime) dfsToFindDegreeTwoPath(vId uint, visited map[*conflictgraph.Vertex]bool, path *[]*conflictgraph.Vertex) {
+	vertex := s.Graph.Vertices[vId]
 	visited[vertex] = true
 	*path = append(*path, vertex)
 
-	for _, neighbor := range s.Graph.AdjacencyMap[vertex] {
+	for _, neighborId := range s.Graph.AdjacencyMap[vId] {
+		neighbor := s.Graph.Vertices[neighborId]
 		if !visited[neighbor] && neighbor.Degree == 2 && !neighbor.IsDeleted {
-			s.dfsToFindDegreeTwoPath(neighbor, visited, path)
+			s.dfsToFindDegreeTwoPath(neighborId, visited, path)
 		}
 	}
+}
+
+func (s *LinearTime) pathReOrg(initPath []*conflictgraph.Vertex) []*conflictgraph.Vertex {
+	inPath := make(map[*conflictgraph.Vertex]bool)
+	visited := make(map[*conflictgraph.Vertex]bool)
+	var st *conflictgraph.Vertex = nil
+	for _, v := range initPath {
+		inPath[v] = true
+		if st == nil {
+			vId := v.TxId
+			for _, neighborId := range s.Graph.AdjacencyMap[vId] {
+				neighbor := s.Graph.Vertices[neighborId]
+				if neighbor.Degree != 2 && !neighbor.IsDeleted {
+					st = v
+					break
+				}
+			}
+		}
+	}
+
+	path := make([]*conflictgraph.Vertex, 0)
+	s.dfsToReOrgPath(st, visited, inPath, &path)
+	return path
 }
 
 func (s *LinearTime) dfsToReOrgPath(vertex *conflictgraph.Vertex, visited map[*conflictgraph.Vertex]bool, inPath map[*conflictgraph.Vertex]bool, path *[]*conflictgraph.Vertex) {
 	visited[vertex] = true
 	*path = append(*path, vertex)
-
-	for _, neighbor := range s.Graph.AdjacencyMap[vertex] {
+	vId := vertex.TxId
+	for _, neighborId := range s.Graph.AdjacencyMap[vId] {
+		neighbor := s.Graph.Vertices[neighborId]
 		if !visited[neighbor] && !neighbor.IsDeleted && inPath[neighbor] {
 			s.dfsToReOrgPath(neighbor, visited, inPath, path)
 		}

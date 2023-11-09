@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"interact/accesslist"
 	conflictgraph "interact/conflictGraph"
+	"interact/mis"
 	"interact/tracer"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -143,27 +144,56 @@ func main() {
 	// }
 	// TODO:预测冲突率、实际冲突率实现
 
-	vertices := make([]*conflictgraph.Vertex, txs.Len())
 	undiConfGraph := conflictgraph.NewUndirectedGraph()
 	for i, tx := range txs {
-		vertices[i] = &conflictgraph.Vertex{
-			TxId:   i,
-			TxHash: tx.Hash(),
-		}
-		undiConfGraph.AddVertex(vertices[i])
+		undiConfGraph.AddVertex(tx.Hash(), uint(i))
 	}
 
 	for i := 0; i < txs.Len(); i++ {
 		for j := i + 1; j < txs.Len(); j++ {
 			if predictLists[i].HasConflict(*predictLists[j]) {
-				undiConfGraph.AddEdge(vertices[i], vertices[j])
+				undiConfGraph.AddEdge(uint(i), uint(j))
 			}
 		}
 	}
+
+	// graphByte, _ := json.Marshal(undiConfGraph)
+	// fmt.Println("Bytelength:", len(graphByte))
+	// openFile, _ := os.Create("graph.json")
+	// defer openFile.Close()
+	// openFile.Write(graphByte)
 
 	groups := undiConfGraph.GetConnectedComponents()
 	fmt.Println("Number of Groups:", len(groups))
 	for i := 0; i < len(groups); i++ {
 		fmt.Printf("Number of Group[%d]:%d\n", i, len(groups[i]))
+	}
+
+	for {
+		MisSolution := mis.NewSolution(undiConfGraph)
+		MisSolution.Solve()
+		ansSlice := MisSolution.IndependentSet.ToSlice()
+		fmt.Println(len(ansSlice))
+
+		for _, v := range undiConfGraph.Vertices {
+			v.IsDeleted = false
+			v.Degree = uint(len(undiConfGraph.AdjacencyMap[v.TxId]))
+		}
+		if len(ansSlice) <= 3 {
+			edgeCount := 0
+			for id := range undiConfGraph.Vertices {
+				edgeCount += len(undiConfGraph.AdjacencyMap[id])
+			}
+			edgeCount /= 2
+			fmt.Println("Node Cound:", len(undiConfGraph.Vertices))
+			fmt.Println("Edge Count:", edgeCount)
+		}
+		for _, v := range ansSlice {
+			undiConfGraph.Vertices[v.(uint)].IsDeleted = true
+		}
+		undiConfGraph = undiConfGraph.CopyGraphWithDeletion()
+		if len(undiConfGraph.Vertices) == 0 {
+			break
+		}
 	}
 }

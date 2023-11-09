@@ -2,10 +2,12 @@ package cachestate
 
 import (
 	"fmt"
+	"interact/accesslist"
 	"math/big"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
@@ -103,6 +105,14 @@ func (accSt *CacheState) AddBalance(addr common.Address, amount *big.Int) {
 	if stateObject != nil {
 		accSt.Journal.append(balanceChange{&addr, stateObject.Data.Balance})
 		stateObject.AddBalance(amount)
+	}
+}
+
+func (accSt *CacheState) SetBalance(addr common.Address, amount *big.Int) {
+	stateObject := accSt.getOrsetAccountObject(addr)
+	if stateObject != nil {
+		accSt.Journal.append(balanceChange{&addr, stateObject.Data.Balance})
+		stateObject.SetBalance(amount)
 	}
 }
 
@@ -248,6 +258,14 @@ func (accSt *CacheState) Selfdestruct6780(addr common.Address) {
 	accSt.SelfDestruct(addr)
 }
 
+func (accSt *CacheState) SetIsAlive(addr common.Address, isAlive bool) {
+	stateObject := accSt.getAccountObject(addr)
+	if stateObject == nil {
+		return
+	}
+	stateObject.IsAlive = isAlive
+}
+
 // Exist 检查账户是否存在
 func (accSt *CacheState) Exist(addr common.Address) bool {
 	return accSt.getAccountObject(addr) != nil
@@ -322,4 +340,35 @@ func (accSt *CacheState) AddressInAccessList(addr common.Address) bool {
 func (s *CacheState) SetTxContext(thash common.Hash, ti int) {
 	s.thash = thash
 	s.txIndex = ti
+}
+
+func (s *CacheState) Prefetch(statedb *state.StateDB, rwSets []*accesslist.RW_AccessLists) {
+	for _, rwSet := range rwSets {
+		for element := range rwSet.ReadAL {
+			prefetchSetter(element, s, statedb)
+		}
+		for element := range rwSet.WriteAL {
+			prefetchSetter(element, s, statedb)
+		}
+	}
+}
+
+func prefetchSetter(element accesslist.Byte52, s *CacheState, statedb *state.StateDB) {
+	addr := common.BytesToAddress(element[:20])
+	hash := common.BytesToHash(element[20:])
+	s.CreateAccount(addr)
+	switch hash {
+	case accesslist.BALANCE:
+		s.SetBalance(addr, statedb.GetBalance(addr))
+	case accesslist.NONCE:
+		s.SetNonce(addr, statedb.GetNonce(addr))
+	case accesslist.CODEHASH:
+		s.SetCode(addr, statedb.GetCode(addr)) // 这里拆得不够细
+	case accesslist.CODE:
+		s.SetCode(addr, statedb.GetCode(addr))
+	case accesslist.ALIVE:
+		s.SetIsAlive(addr, statedb.Exist(addr))
+	default:
+		s.SetState(addr, hash, statedb.GetState(addr, hash))
+	}
 }
