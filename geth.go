@@ -104,7 +104,11 @@ func main() {
 	fmt.Println("Block Height:", num)
 	headBlock := rawdb.ReadBlock(chainDB, head, num)
 	txs := headBlock.Transactions()
+	
 	trueLists := TrueRWALs(txs, chainDB, sdbBackend, num)
+
+	// TODO: 获取 OldAccessList
+
 	// Node.Close()
 
 	// Node, chainDB, sdbBackend = GetEthDatabaseAndStateDatabase()
@@ -113,6 +117,8 @@ func main() {
 	for i, tx := range txs {
 		fmt.Printf("Starting Predicting Tx[%d]\n", i)
 		predictLists[i] = PredictRWAL(tx, chainDB, sdbBackend, num)
+
+		// TODO: 获取 预测的 OldAccessList
 	}
 	fmt.Println("Finishing Run Predicting RWALs")
 
@@ -157,6 +163,8 @@ func main() {
 		}
 	}
 
+	// TODO: 依据 OldAccessList 建图
+
 	// graphByte, _ := json.Marshal(undiConfGraph)
 	// fmt.Println("Bytelength:", len(graphByte))
 	// openFile, _ := os.Create("graph.json")
@@ -169,6 +177,7 @@ func main() {
 		fmt.Printf("Number of Group[%d]:%d\n", i, len(groups[i]))
 	}
 
+	// ! 最大独立集消组模拟
 	for {
 		MisSolution := mis.NewSolution(undiConfGraph)
 		MisSolution.Solve()
