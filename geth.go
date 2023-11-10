@@ -62,6 +62,24 @@ func PredictRWAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend state
 	return list
 }
 
+// PredictOldAL 获取预测的OldAccessList，即在不更新StateDB的条件下执行交易获取OldAccessList
+func PredictOldAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) *accesslist.AccessList {
+
+	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
+	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
+
+	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
+	if err != nil {
+		panic(err)
+	}
+
+	headHash := rawdb.ReadCanonicalHash(chainDB, num)
+	header := rawdb.ReadHeader(chainDB, headHash, num)
+	list, _ := tracer.CreateOldAL(state, tx, header)
+
+	return list
+}
+
 func TrueRWALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) []*accesslist.RW_AccessLists {
 	fmt.Println("Staring Run True RWALs")
 	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
@@ -76,21 +94,26 @@ func TrueRWALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend stat
 	header := rawdb.ReadHeader(chainDB, headHash, num)
 
 	lists := tracer.CreateRWALWithTransactions(state, txs, header)
-	// file, err := os.Create("RWSet")
-	// if err != nil {
-	// 	fmt.Println("Open file err =", err)
-	// 	return
-	// }
-	// defer file.Close()
-	// for id, list := range lists {
-	// 	listJSON := list.ToJSON()
-	// 	b := common.Hex2Bytes(listJSON)
-	// 	_, err := file.WriteString("{" + `"` + txs[id].Hash().String() + `"` + ":" + string(b) + "}\n")
-	// 	if err != nil {
-	// 		fmt.Println("Write file err =", err)
-	// 		return
-	// 	}
-	// }
+	fmt.Println("Finishing Run True RWALs")
+	return lists
+}
+
+func OldTrueALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) []*accesslist.AccessList {
+	fmt.Println("Staring Run True OldALs")
+	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
+	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
+
+	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
+	if err != nil {
+		panic(err)
+	}
+
+	headHash := rawdb.ReadCanonicalHash(chainDB, num)
+	header := rawdb.ReadHeader(chainDB, headHash, num)
+
+	// ? 关键
+	lists := tracer.CreateOldALWithTransactions(state, txs, header)
+
 	fmt.Println("Finishing Run True RWALs")
 	return lists
 }
@@ -104,24 +127,29 @@ func main() {
 	fmt.Println("Block Height:", num)
 	headBlock := rawdb.ReadBlock(chainDB, head, num)
 	txs := headBlock.Transactions()
-	
+
+	// TODO: 获取 真实的 NewAccessList
 	trueLists := TrueRWALs(txs, chainDB, sdbBackend, num)
 
-	// TODO: 获取 OldAccessList
+	// TODO: 获取 真实的 OldAccessList
+	trueOldLists := OldTrueALs(txs, chainDB, sdbBackend, num)
 
 	// Node.Close()
 
 	// Node, chainDB, sdbBackend = GetEthDatabaseAndStateDatabase()
 	predictLists := make([]*accesslist.RW_AccessLists, txs.Len())
+	predictOldLists := make([]*accesslist.AccessList, txs.Len())
 	fmt.Println("Staring Run Predicting RWALs")
 	for i, tx := range txs {
 		fmt.Printf("Starting Predicting Tx[%d]\n", i)
 		predictLists[i] = PredictRWAL(tx, chainDB, sdbBackend, num)
 
 		// TODO: 获取 预测的 OldAccessList
+		predictOldLists[i] = PredictOldAL(tx, chainDB, sdbBackend, num)
 	}
-	fmt.Println("Finishing Run Predicting RWALs")
+	fmt.Println("Finishing Run Predicting RWALs and OldALs")
 
+	// 新AccessList两者冲突检测
 	conflictCounter := 0
 	nilCounter := 0
 	conflictTxs := make([]int, 0)
@@ -135,21 +163,30 @@ func main() {
 			conflictTxs = append(conflictTxs, i)
 		}
 	}
+
+	// TODO:预测冲突率、实际冲突率实现
+	// 旧AccessList两者冲突检测
+	conflictCounter1 := 0
+	nilCounter1 := 0
+	conflictTxs1 := make([]int, 0)
+	for i, list := range trueOldLists {
+		if predictOldLists[i] == nil {
+			nilCounter1++
+			continue
+		}
+		if !list.OldEqual(*predictOldLists[i]) {
+			conflictCounter1++
+			conflictTxs1 = append(conflictTxs1, i)
+		}
+	}
+
 	fmt.Println("Nil Prediction Number:", nilCounter)
 	fmt.Println("False Prediction Number:", conflictCounter)
-	// fmt.Println("False Predicted Transactions:")
-	// for _, i := range conflictTxs {
-	// 	fmt.Println(txs[i].Hash())
-	// 	listJson := predictLists[i].ToJSON()
-	// 	b := common.Hex2Bytes(listJson)
-	// 	fmt.Println("Predicted RW Sets:", string(b))
 
-	// 	listJson = trueLists[i].ToJSON()
-	// 	b = common.Hex2Bytes(listJson)
-	// 	fmt.Println("True RW Sets:", string(b))
-	// }
-	// TODO:预测冲突率、实际冲突率实现
+	fmt.Println("Old Nil Prediction Number:", nilCounter1)
+	fmt.Println("Old False Prediction Number:", conflictCounter1)
 
+	// 新的AccessList建图
 	undiConfGraph := conflictgraph.NewUndirectedGraph()
 	for i, tx := range txs {
 		undiConfGraph.AddVertex(tx.Hash(), uint(i))
@@ -165,16 +202,30 @@ func main() {
 
 	// TODO: 依据 OldAccessList 建图
 
-	// graphByte, _ := json.Marshal(undiConfGraph)
-	// fmt.Println("Bytelength:", len(graphByte))
-	// openFile, _ := os.Create("graph.json")
-	// defer openFile.Close()
-	// openFile.Write(graphByte)
+	OldundiConfGraph := conflictgraph.NewUndirectedGraph()
+	for i, tx := range txs {
+		undiConfGraph.AddVertex(tx.Hash(), uint(i))
+	}
 
+	for i := 0; i < txs.Len(); i++ {
+		for j := i + 1; j < txs.Len(); j++ {
+			if predictOldLists[i].HasOldConflict(*predictOldLists[j]) {
+				OldundiConfGraph.AddEdge(uint(i), uint(j))
+			}
+		}
+	}
+
+	// 对两类图分别输出结果
 	groups := undiConfGraph.GetConnectedComponents()
 	fmt.Println("Number of Groups:", len(groups))
 	for i := 0; i < len(groups); i++ {
 		fmt.Printf("Number of Group[%d]:%d\n", i, len(groups[i]))
+	}
+
+	Oldgroups := OldundiConfGraph.GetConnectedComponents()
+	fmt.Println("Old Number of Groups:", len(Oldgroups))
+	for i := 0; i < len(Oldgroups); i++ {
+		fmt.Printf("Old Number of Group[%d]:%d\n", i, len(Oldgroups[i]))
 	}
 
 	// ! 最大独立集消组模拟
