@@ -196,4 +196,11 @@ func main() {
 			break
 		}
 	}
+	// 执行交易
+	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
+	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
+
+	statedb, _ := statedb.New(baseHeader.Root, sdbBackend, nil)
+	tracer.ExecuteWithGopool(statedb, predictLists, groups, txs, baseHeader)
+
 }

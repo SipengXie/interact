@@ -4,6 +4,7 @@ go 1.20
 
 require (
 	github.com/deckarep/golang-set v1.8.0
+	github.com/devchat-ai/gopool v0.6.2
 	github.com/ethereum/go-ethereum v1.13.3
 	github.com/holiman/uint256 v1.2.3
 )
