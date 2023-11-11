@@ -37,10 +37,11 @@ type revision struct {
 type CacheState struct {
 	Accounts map[common.Address]*accountObject `json:"accounts,omitempty"`
 
-	Logs    map[common.Hash][]*types.Log `json:"logs,omitempty"`
-	thash   common.Hash
-	txIndex int
-	logSize uint
+	Logs       map[common.Hash][]*types.Log `json:"logs,omitempty"`
+	thash      common.Hash
+	txIndex    int
+	logSize    uint
+	stateJudge bool
 
 	Journal        *journal `json:"journal,omitempty"`
 	ValidRevisions []revision
@@ -49,9 +50,10 @@ type CacheState struct {
 
 func NewStateDB() *CacheState {
 	return &CacheState{
-		Accounts: make(map[common.Address]*accountObject),
-		Journal:  newJournal(),
-		Logs:     make(map[common.Hash][]*types.Log),
+		Accounts:   make(map[common.Address]*accountObject),
+		Journal:    newJournal(),
+		Logs:       make(map[common.Hash][]*types.Log),
+		stateJudge: true,
 	}
 }
 
@@ -340,6 +342,13 @@ func (accSt *CacheState) AddressInAccessList(addr common.Address) bool {
 func (s *CacheState) SetTxContext(thash common.Hash, ti int) {
 	s.thash = thash
 	s.txIndex = ti
+}
+
+// 若存在无法读取或写入的地址orslot，将stateJudge置为false
+func (s *CacheState) SetTxStateErr(thash common.Hash, ti int) {
+	s.thash = thash
+	s.txIndex = ti
+	s.stateJudge = false
 }
 
 func (s *CacheState) Prefetch(statedb *state.StateDB, rwSets []*accesslist.RW_AccessLists) {
