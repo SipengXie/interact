@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"interact/accesslist"
 	conflictgraph "interact/conflictGraph"
+	"interact/core"
 	"interact/mis"
 	"interact/tracer"
+	"os"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	statedb "github.com/ethereum/go-ethereum/core/state"
@@ -53,7 +55,11 @@ func PredictRWAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend state
 
 	headHash := rawdb.ReadCanonicalHash(chainDB, num)
 	header := rawdb.ReadHeader(chainDB, headHash, num)
-	list, _ := tracer.CreateRWAL(state, tx, header)
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
+	list, err := tracer.CreateRWAL(state, tx, header, fakeChainCtx)
+	if err != nil {
+		fmt.Println("NIL tx hash:", tx.Hash())
+	}
 	// listJSON := list.ToJSON()
 	// b := common.Hex2Bytes(listJSON)
 	// fmt.Println("Tx Hash is:", tx.Hash())
@@ -62,113 +68,89 @@ func PredictRWAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend state
 	return list
 }
 
-func TrueRWALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) []*accesslist.RW_AccessLists {
-	fmt.Println("Staring Run True RWALs")
+func TrueRWALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) ([]*accesslist.RW_AccessLists, error) {
 	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
 	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
 
 	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	headHash := rawdb.ReadCanonicalHash(chainDB, num)
 	header := rawdb.ReadHeader(chainDB, headHash, num)
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
-	lists := tracer.CreateRWALWithTransactions(state, txs, header)
-	// file, err := os.Create("RWSet")
-	// if err != nil {
-	// 	fmt.Println("Open file err =", err)
-	// 	return
-	// }
-	// defer file.Close()
-	// for id, list := range lists {
-	// 	listJSON := list.ToJSON()
-	// 	b := common.Hex2Bytes(listJSON)
-	// 	_, err := file.WriteString("{" + `"` + txs[id].Hash().String() + `"` + ":" + string(b) + "}\n")
-	// 	if err != nil {
-	// 		fmt.Println("Write file err =", err)
-	// 		return
-	// 	}
-	// }
-	fmt.Println("Finishing Run True RWALs")
-	return lists
+	lists, errs := tracer.CreateRWALWithTransactions(state, txs, header, fakeChainCtx)
+	for i, err := range errs {
+		if err != nil {
+			fmt.Println("In TRUERWALS, tx hash:", txs[i].Hash())
+			panic(err)
+		}
+	}
+	return lists, nil
 }
 
-func main() {
-	Node, chainDB, sdbBackend := GetEthDatabaseAndStateDatabase()
-	defer Node.Close()
+func IterateBlock(chainDB ethdb.Database, sdbBackend statedb.Database, startHeight uint64) {
+	num := startHeight
+	file, _ := os.Create("test.txt")
+	defer file.Close()
+	for {
+		fmt.Fprintln(file, "Processing Block Height:", num)
+		headHash := rawdb.ReadCanonicalHash(chainDB, num)
+		Block := rawdb.ReadBlock(chainDB, headHash, num)
+		txs := Block.Transactions()
 
-	head := rawdb.ReadHeadBlockHash(chainDB)
-	num := *rawdb.ReadHeaderNumber(chainDB, head)
-	fmt.Println("Block Height:", num)
-	headBlock := rawdb.ReadBlock(chainDB, head, num)
-	txs := headBlock.Transactions()
-	trueLists := TrueRWALs(txs, chainDB, sdbBackend, num)
-	// Node.Close()
-
-	// Node, chainDB, sdbBackend = GetEthDatabaseAndStateDatabase()
-	predictLists := make([]*accesslist.RW_AccessLists, txs.Len())
-	fmt.Println("Staring Run Predicting RWALs")
-	for i, tx := range txs {
-		fmt.Printf("Starting Predicting Tx[%d]\n", i)
-		predictLists[i] = PredictRWAL(tx, chainDB, sdbBackend, num)
-	}
-	fmt.Println("Finishing Run Predicting RWALs")
-
-	conflictCounter := 0
-	nilCounter := 0
-	conflictTxs := make([]int, 0)
-	for i, list := range trueLists {
-		if predictLists[i] == nil {
-			nilCounter++
-			continue
+		trueLists, err := TrueRWALs(txs, chainDB, sdbBackend, num)
+		if err != nil {
+			break
 		}
-		if !list.Equal(*predictLists[i]) {
-			conflictCounter++
-			conflictTxs = append(conflictTxs, i)
+
+		predictLists := make([]*accesslist.RW_AccessLists, txs.Len())
+		for i, tx := range txs {
+			predictLists[i] = PredictRWAL(tx, chainDB, sdbBackend, num)
 		}
-	}
-	fmt.Println("Nil Prediction Number:", nilCounter)
-	fmt.Println("False Prediction Number:", conflictCounter)
-	// fmt.Println("False Predicted Transactions:")
-	// for _, i := range conflictTxs {
-	// 	fmt.Println(txs[i].Hash())
-	// 	listJson := predictLists[i].ToJSON()
-	// 	b := common.Hex2Bytes(listJson)
-	// 	fmt.Println("Predicted RW Sets:", string(b))
-
-	// 	listJson = trueLists[i].ToJSON()
-	// 	b = common.Hex2Bytes(listJson)
-	// 	fmt.Println("True RW Sets:", string(b))
-	// }
-	// TODO:预测冲突率、实际冲突率实现
-
-	undiConfGraph := conflictgraph.NewUndirectedGraph()
-	for i, tx := range txs {
-		undiConfGraph.AddVertex(tx.Hash(), uint(i))
-	}
-
-	for i := 0; i < txs.Len(); i++ {
-		for j := i + 1; j < txs.Len(); j++ {
-			if predictLists[i].HasConflict(*predictLists[j]) {
-				undiConfGraph.AddEdge(uint(i), uint(j))
+		nilCounter := 0
+		conflictCounter := 0
+		for i, list := range trueLists {
+			if predictLists[i] == nil {
+				nilCounter++
+				continue
+			}
+			if !list.Equal(*predictLists[i]) {
+				conflictCounter++
 			}
 		}
+		fmt.Fprintln(file, "Nil Prediction Number:", nilCounter)
+		fmt.Fprintln(file, "False Prediction Number:", conflictCounter)
+
+		undiConfGraph := conflictgraph.NewUndirectedGraph()
+		for i, tx := range txs {
+			undiConfGraph.AddVertex(tx.Hash(), uint(i))
+		}
+
+		for i := 0; i < txs.Len(); i++ {
+			for j := i + 1; j < txs.Len(); j++ {
+				if predictLists[i] == nil || predictLists[j] == nil {
+					continue
+				}
+				if predictLists[i].HasConflict(*predictLists[j]) {
+					undiConfGraph.AddEdge(uint(i), uint(j))
+				}
+			}
+		}
+
+		groups := undiConfGraph.GetConnectedComponents()
+		fmt.Fprintln(file, "Number of Groups:", len(groups))
+		for i := 0; i < len(groups); i++ {
+			fmt.Fprintf(file, "Number of Group[%d]:%d\n", i, len(groups[i]))
+		}
+
+		num--
 	}
+}
 
-	// graphByte, _ := json.Marshal(undiConfGraph)
-	// fmt.Println("Bytelength:", len(graphByte))
-	// openFile, _ := os.Create("graph.json")
-	// defer openFile.Close()
-	// openFile.Write(graphByte)
-
-	groups := undiConfGraph.GetConnectedComponents()
-	fmt.Println("Number of Groups:", len(groups))
-	for i := 0; i < len(groups); i++ {
-		fmt.Printf("Number of Group[%d]:%d\n", i, len(groups[i]))
-	}
-
+func SolveMISInTurn(undiConfGraph *conflictgraph.UndirectedGraph) {
 	for {
 		MisSolution := mis.NewSolution(undiConfGraph)
 		MisSolution.Solve()
@@ -196,4 +178,14 @@ func main() {
 			break
 		}
 	}
+}
+
+func main() {
+	Node, chainDB, sdbBackend := GetEthDatabaseAndStateDatabase()
+	defer Node.Close()
+
+	head := rawdb.ReadHeadBlockHash(chainDB)
+	num := *rawdb.ReadHeaderNumber(chainDB, head)
+
+	IterateBlock(chainDB, sdbBackend, num)
 }

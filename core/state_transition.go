@@ -412,7 +412,8 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		vmerr error // vm errors do not effect consensus and are therefore not assigned to err
 	)
 	if contractCreation {
-		ret, _, st.gasRemaining, vmerr = st.evm.Create2(sender, msg.Data, st.gasRemaining, msg.Value, msg.Salt)
+		//ret, _, st.gasRemaining, vmerr = st.evm.Create2(sender, msg.Data, st.gasRemaining, msg.Value, msg.Salt)
+		ret, _, st.gasRemaining, vmerr = st.evm.Create(sender, msg.Data, st.gasRemaining, msg.Value)
 	} else {
 		// Increment the nonce for the next transaction
 		st.state.SetNonce(msg.From, st.state.GetNonce(sender.Address())+1)

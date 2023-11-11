@@ -1,8 +1,6 @@
 package tracer
 
 import (
-	"fmt"
-
 	"interact/accesslist"
 	"interact/core"
 
@@ -14,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-func CreateRWAL(statedb *state.StateDB, tx *types.Transaction, header *types.Header) (*accesslist.RW_AccessLists, error) {
+func CreateRWAL(statedb *state.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RW_AccessLists, error) {
 	from, _ := types.Sender(types.LatestSigner(params.MainnetChainConfig), tx)
 	var to common.Address = common.Address{}
 	if tx.To() != nil {
@@ -70,16 +68,16 @@ func CreateRWAL(statedb *state.StateDB, tx *types.Transaction, header *types.Hea
 	// args.AccessList = RWAL.ToJSON()
 	// msg, err := args.ToMessage(1000000000000000, header.BaseFee) // 没有设置globalGasCap
 	msg, err := core.TransactionToMessage(tx, types.LatestSigner(params.MainnetChainConfig), header.BaseFee)
-	msg.SkipAccountChecks = true
+
 	if err != nil {
 		return nil, err // TODO: handle error
 	}
-
+	msg.SkipAccountChecks = true
 	coinbase := common.BytesToAddress([]byte("coinbase"))
 	// tracer := NewRWAccessListTracer(RWAL, precompiles)
 	config := vm.Config{Tracer: tracer}
 	txCtx := core.NewEVMTxContext(msg)
-	blkCtx := core.NewEVMBlockContext(header, nil, &coinbase)
+	blkCtx := core.NewEVMBlockContext(header, chainCtx, &coinbase)
 	vm := vm.NewEVM(blkCtx, txCtx, statedb, params.MainnetChainConfig, config)
 	_, err = core.ApplyMessage(vm, msg, new(core.GasPool).AddGas(msg.GasLimit))
 	if err != nil {
@@ -93,11 +91,11 @@ func CreateRWAL(statedb *state.StateDB, tx *types.Transaction, header *types.Hea
 	// }
 }
 
-func CreateRWALWithTransactions(db *state.StateDB, txs []*types.Transaction, header *types.Header) []*accesslist.RW_AccessLists {
+func CreateRWALWithTransactions(db *state.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RW_AccessLists, []error) {
 	ret := make([]*accesslist.RW_AccessLists, len(txs))
+	err := make([]error, len(txs))
 	for i, tx := range txs {
-		fmt.Printf("tx[%d] -%s- starting\n", i, tx.Hash())
-		ret[i], _ = CreateRWAL(db, tx, header)
+		ret[i], err[i] = CreateRWAL(db, tx, header, chainCtx)
 	}
-	return ret
+	return ret, err
 }

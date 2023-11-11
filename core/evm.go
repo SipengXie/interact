@@ -20,20 +20,33 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
+	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/ethdb"
 )
 
 // ChainContext supports retrieving headers and consensus parameters from the
 // current blockchain to be used during transaction processing.
 type ChainContext interface {
 	// Engine retrieves the chain's consensus engine.
-	Engine() consensus.Engine
+	// Engine() consensus.Engine
 
 	// GetHeader returns the header corresponding to the hash/number argument pair.
 	GetHeader(common.Hash, uint64) *types.Header
+}
+
+type FakeChainContext struct {
+	chainDB ethdb.Database
+}
+
+func NewFakeChainContext(chainDB ethdb.Database) *FakeChainContext {
+	return &FakeChainContext{chainDB: chainDB}
+}
+
+func (f *FakeChainContext) GetHeader(hash common.Hash, number uint64) *types.Header {
+	return rawdb.ReadHeader(f.chainDB, hash, number)
 }
 
 // NewEVMBlockContext creates a new context for use in the EVM.
@@ -44,13 +57,13 @@ func NewEVMBlockContext(header *types.Header, chain ChainContext, author *common
 		blobBaseFee *big.Int
 		random      *common.Hash
 	)
-
+	beneficiary = *author
 	// If we don't have an explicit author (i.e. not mining), extract from the header
-	if author == nil {
-		beneficiary, _ = chain.Engine().Author(header) // Ignore error, we're past header validation
-	} else {
-		beneficiary = *author
-	}
+	// if author == nil {
+	// 	beneficiary, _ = chain.Engine().Author(header) // Ignore error, we're past header validation
+	// } else {
+
+	// }
 	if header.BaseFee != nil {
 		baseFee = new(big.Int).Set(header.BaseFee)
 	}
