@@ -278,6 +278,15 @@ func (al *AccessList) AddAddress(address common.Address) bool {
 	return true
 }
 
+// AddAddressInt 可以添加Slots标号
+func (al *AccessList) AddAddressInt(address common.Address, index int) bool {
+	if _, present := al.Addresses[address]; present {
+		return false
+	}
+	al.Addresses[address] = index
+	return true
+}
+
 // Copy creates an independent copy of an accessList.
 func (a *AccessList) Copy() *AccessList {
 	cp := NewAccessList()
@@ -293,4 +302,72 @@ func (a *AccessList) Copy() *AccessList {
 		cp.Slots[i] = newSlotmap
 	}
 	return cp
+}
+
+// OldEqual 判断两个AccessList是否相等
+func (a *AccessList) OldEqual(other AccessList) bool {
+	if len(a.Addresses) != len(other.Addresses) {
+		return false
+	}
+	if len(a.Slots) != len(other.Slots) {
+		return false
+	}
+	for key := range a.Addresses {
+		if !other.AccessListIsAddressExce(key) {
+			return false
+		}
+		for s, _ := range a.Slots[a.Addresses[key]] { // 暂时不对比slots中的struct是否相同
+			is := false
+			for ss, _ := range other.Slots[other.Addresses[key]] {
+				if s == ss { // slots中的一项相同
+					is = true
+					break
+				}
+			}
+			if !is {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// HasOldConflict 判断两个OldAccessList是否存在相同的部分（冲突）
+func (a *AccessList) HasOldConflict(other AccessList) bool {
+	for key, value := range a.Addresses {
+		// 不存在slots
+		if value == -1 {
+			if other.ContainsAddress(key) {
+				fmt.Println("地址冲突1")
+				return true
+			} else {
+				continue
+			}
+		} else {
+			// 存在slots
+			s := a.Slots[a.Addresses[key]] // a 的slots数组
+			if other.ContainsAddress(key) {
+				// other 也有对应的地址
+				if other.Addresses[key] == -1 {
+					// other 对应的地址没有slots，同样认为是冲突
+					fmt.Println("地址冲突2")
+					return true
+				} else {
+					// other 对应的地址有slots
+					for s1, _ := range s {
+						for s2, _ := range other.Slots[other.Addresses[key]] {
+							if s1 == s2 {
+								fmt.Println("地址冲突3")
+								return true
+							}
+						}
+					}
+				}
+			} else {
+				// other 没有对应的地址
+				continue
+			}
+		}
+	}
+	return false
 }
