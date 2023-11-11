@@ -2,7 +2,6 @@ package tracer
 
 import (
 	"interact/accesslist"
-	cachestate "interact/cacheState"
 	"interact/core"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -13,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-func CreateRWAL(statedb *state.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RW_AccessLists, error) {
+func ExecBasedOnRWAL(statedb vm.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RW_AccessLists, error) {
 	from, _ := types.Sender(types.LatestSigner(params.MainnetChainConfig), tx)
 	var to common.Address = common.Address{}
 	if tx.To() != nil {
@@ -61,14 +60,7 @@ func CreateRWAL(statedb *state.StateDB, tx *types.Transaction, header *types.Hea
 		}
 
 	}
-	// if args.RWAccessList() != nil {
-	// 	tracer.list.Merge(*args.RWAccessList())
-	// }
 
-	// for {
-	// RWAL := tracer.RWAccessList()
-	// args.AccessList = RWAL.ToJSON()
-	// msg, err := args.ToMessage(1000000000000000, header.BaseFee) // 没有设置globalGasCap
 	msg, err := core.TransactionToMessage(tx, types.LatestSigner(params.MainnetChainConfig), header.BaseFee)
 
 	if err != nil {
@@ -76,7 +68,6 @@ func CreateRWAL(statedb *state.StateDB, tx *types.Transaction, header *types.Hea
 	}
 	msg.SkipAccountChecks = true
 	coinbase := common.BytesToAddress([]byte("coinbase"))
-	// tracer := NewRWAccessListTracer(RWAL, precompiles)
 	config := vm.Config{Tracer: tracer}
 	txCtx := core.NewEVMTxContext(msg)
 	blkCtx := core.NewEVMBlockContext(header, chainCtx, &coinbase)
@@ -86,33 +77,10 @@ func CreateRWAL(statedb *state.StateDB, tx *types.Transaction, header *types.Hea
 		return nil, err // TODO: handle error
 	}
 	return tracer.list, nil
-	// if tracer.list.Equal(*tracer.list) {
-	// 	return tracer.list
-	// }
-	// tracer = tracer
-	// }
-}
-
-func CreateRWALWithTransactions(db *state.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RW_AccessLists, []error) {
-	ret := make([]*accesslist.RW_AccessLists, len(txs))
-	err := make([]error, len(txs))
-	for i, tx := range txs {
-		ret[i], err[i] = CreateRWAL(db, tx, header, chainCtx)
-	}
-	return ret, err
-}
-
-func CreateOldALWithTransactions(db *state.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.AccessList, []error) {
-	ret := make([]*accesslist.AccessList, len(txs))
-	err := make([]error, len(txs))
-	for i, tx := range txs {
-		ret[i], err[i] = CreateOldAL(db, tx, header, chainCtx)
-	}
-	return ret, err
 }
 
 // CreateOldAL 获取交易实际运行时的OldAccessList
-func CreateOldAL(statedb *state.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.AccessList, error) {
+func ExecBasedOnOldAL(statedb vm.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.AccessList, error) {
 	from, _ := types.Sender(types.LatestSigner(params.MainnetChainConfig), tx)
 	var to common.Address = common.Address{}
 	if tx.To() != nil {
@@ -135,7 +103,7 @@ func CreateOldAL(statedb *state.StateDB, tx *types.Transaction, header *types.He
 	}
 	msg.SkipAccountChecks = true
 	coinbase := common.BytesToAddress([]byte("coinbase"))
-	// tracer := NewRWAccessListTracer(RWAL, precompiles)
+
 	config := vm.Config{Tracer: tracer}
 	txCtx := core.NewEVMTxContext(msg)
 	blkCtx := core.NewEVMBlockContext(header, chainCtx, &coinbase)
@@ -181,71 +149,20 @@ func ChangeAccessList(tracer accessList) *accesslist.AccessList {
 	return al
 }
 
-func ExeBasedRWAL(statedb *cachestate.CacheState, tx *types.Transaction, header *types.Header) (*accesslist.RW_AccessLists, error) {
-	from, _ := types.Sender(types.LatestSigner(params.MainnetChainConfig), tx)
-	var to common.Address = common.Address{}
-	if tx.To() != nil {
-		to = *tx.To()
+func CreateRWALWithTransactions(db *state.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RW_AccessLists, []error) {
+	ret := make([]*accesslist.RW_AccessLists, len(txs))
+	err := make([]error, len(txs))
+	for i, tx := range txs {
+		ret[i], err[i] = ExecBasedOnRWAL(db, tx, header, chainCtx)
 	}
-	isCreate := false
-	if to == (common.Address{}) {
-		// hash := crypto.Keccak256Hash(tx.Data()).Bytes()
-		// to = crypto.CreateAddress2(from, args.salt().Bytes32(), hash)
-		to = crypto.CreateAddress(from, tx.Nonce())
-		isCreate = true
+	return ret, err
+}
+
+func CreateOldALWithTransactions(db *state.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.AccessList, []error) {
+	ret := make([]*accesslist.AccessList, len(txs))
+	err := make([]error, len(txs))
+	for i, tx := range txs {
+		ret[i], err[i] = ExecBasedOnOldAL(db, tx, header, chainCtx)
 	}
-	isPostMerge := header.Difficulty.Cmp(common.Big0) == 0
-	precompiles := vm.ActivePrecompiles(params.MainnetChainConfig.Rules(header.Number, isPostMerge, header.Time)) // 非常不严谨的chainconfig
-	tracer := NewRWAccessListTracer(nil, precompiles)
-	if isCreate {
-		tracer.list.AddReadAL(from, BALANCE)
-		tracer.list.AddWriteAL(from, BALANCE)
-		tracer.list.AddReadAL(from, NONCE)
-		tracer.list.AddWriteAL(from, NONCE)
-
-		tracer.list.AddWriteAL(to, BALANCE)
-		tracer.list.AddWriteAL(to, CODEHASH)
-		tracer.list.AddWriteAL(to, CODE)
-		tracer.list.AddWriteAL(to, NONCE)
-		tracer.list.AddWriteAL(to, ALIVE)
-		// Read to check if the contract to is already occupied
-		tracer.list.AddReadAL(to, NONCE)
-		tracer.list.AddReadAL(to, CODEHASH)
-	} else {
-		tracer.list.AddReadAL(from, BALANCE)
-		tracer.list.AddWriteAL(from, BALANCE)
-		tracer.list.AddReadAL(from, NONCE)
-		tracer.list.AddWriteAL(from, NONCE)
-
-		tracer.list.AddReadAL(to, CODE)
-		tracer.list.AddReadAL(to, CODEHASH)
-
-		// if value == 0, we could determine thta to-balance won't be touched
-		value := tx.Value()
-		if value.Cmp(common.Big0) != 0 {
-			tracer.list.AddReadAL(to, BALANCE)
-			tracer.list.AddWriteAL(to, BALANCE)
-		}
-
-	}
-
-	msg, err := core.TransactionToMessage(tx, types.LatestSigner(params.MainnetChainConfig), header.BaseFee)
-	msg.SkipAccountChecks = true
-	if err != nil {
-		// TODO: handle error
-		return nil, err
-	}
-
-	coinbase := common.BytesToAddress([]byte("coinbase"))
-	// tracer := NewRWAccessListTracer(RWAL, precompiles)
-	config := vm.Config{Tracer: tracer}
-	txCtx := core.NewEVMTxContext(msg)
-	blkCtx := core.NewEVMBlockContext(header, nil, &coinbase)
-	vm := vm.NewEVM(blkCtx, txCtx, statedb, params.MainnetChainConfig, config)
-	_, err = core.ApplyMessage(vm, msg, new(core.GasPool).AddGas(msg.GasLimit))
-	if err != nil {
-		// TODO: handle error
-		return nil, err
-	}
-	return tracer.list, nil
+	return ret, err
 }

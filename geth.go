@@ -56,7 +56,7 @@ func PredictRWAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend state
 	headHash := rawdb.ReadCanonicalHash(chainDB, num)
 	header := rawdb.ReadHeader(chainDB, headHash, num)
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
-	list, err := tracer.CreateRWAL(state, tx, header, fakeChainCtx)
+	list, err := tracer.ExecBasedOnRWAL(state, tx, header, fakeChainCtx)
 	if err != nil {
 		fmt.Println("NIL tx hash:", tx.Hash())
 	}
@@ -77,7 +77,7 @@ func PredictOldAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend stat
 	headHash := rawdb.ReadCanonicalHash(chainDB, num)
 	header := rawdb.ReadHeader(chainDB, headHash, num)
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
-	list, err := tracer.CreateOldAL(state, tx, header, fakeChainCtx)
+	list, err := tracer.ExecBasedOnOldAL(state, tx, header, fakeChainCtx)
 	if err != nil {
 		fmt.Println("NIL tx hash:", tx.Hash())
 	}
@@ -217,13 +217,6 @@ func SolveMISInTurn(undiConfGraph *conflictgraph.UndirectedGraph) {
 			break
 		}
 	}
-	// 执行交易
-	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
-	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
-
-	statedb, _ := statedb.New(baseHeader.Root, sdbBackend, nil)
-	tracer.ExecuteWithGopool(statedb, predictLists, groups, txs, baseHeader)
-
 }
 
 func main() {
