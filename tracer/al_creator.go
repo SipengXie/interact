@@ -101,17 +101,17 @@ func CreateRWALWithTransactions(db *state.StateDB, txs []*types.Transaction, hea
 	return ret, err
 }
 
-func CreateOldALWithTransactions(db *state.StateDB, txs []*types.Transaction, header *types.Header) []*accesslist.AccessList {
+func CreateOldALWithTransactions(db *state.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.AccessList, []error) {
 	ret := make([]*accesslist.AccessList, len(txs))
+	err := make([]error, len(txs))
 	for i, tx := range txs {
-		fmt.Printf("Old AccessList : tx[%d] -%s- starting\n", i, tx.Hash())
-		ret[i], _ = CreateOldAL(db, tx, header)
+		ret[i], err[i] = CreateOldAL(db, tx, header, chainCtx)
 	}
-	return ret
+	return ret, err
 }
 
 // CreateOldAL 获取交易实际运行时的OldAccessList
-func CreateOldAL(statedb *state.StateDB, tx *types.Transaction, header *types.Header) (*accesslist.AccessList, error) {
+func CreateOldAL(statedb *state.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.AccessList, error) {
 	from, _ := types.Sender(types.LatestSigner(params.MainnetChainConfig), tx)
 	var to common.Address = common.Address{}
 	if tx.To() != nil {
@@ -128,15 +128,16 @@ func CreateOldAL(statedb *state.StateDB, tx *types.Transaction, header *types.He
 
 	// 开始执行交易步骤
 	msg, err := core.TransactionToMessage(tx, types.LatestSigner(params.MainnetChainConfig), header.BaseFee)
-	msg.SkipAccountChecks = true
+
 	if err != nil {
 		return nil, err // TODO: handle error
 	}
-
+	msg.SkipAccountChecks = true
 	coinbase := common.BytesToAddress([]byte("coinbase"))
+	// tracer := NewRWAccessListTracer(RWAL, precompiles)
 	config := vm.Config{Tracer: tracer}
 	txCtx := core.NewEVMTxContext(msg)
-	blkCtx := core.NewEVMBlockContext(header, nil, &coinbase)
+	blkCtx := core.NewEVMBlockContext(header, chainCtx, &coinbase)
 	vm := vm.NewEVM(blkCtx, txCtx, statedb, params.MainnetChainConfig, config)
 	_, err = core.ApplyMessage(vm, msg, new(core.GasPool).AddGas(msg.GasLimit))
 	if err != nil {
