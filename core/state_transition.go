@@ -138,7 +138,7 @@ type Message struct {
 	GasTipCap     *big.Int
 	Data          []byte
 	Salt          *uint256.Int
-	RWAccessList  accesslist.RW_AccessLists
+	RWAccessList  accesslist.RWSet
 	AccessList    types.AccessList
 	BlobGasFeeCap *big.Int
 	BlobHashes    []common.Hash

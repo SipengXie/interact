@@ -18,7 +18,7 @@ func Execute(cacheStateDb *cachestate.CacheState, txs []*types.Transaction, head
 		// 交易执行
 		// 这里对 cachestatedb 快照一下
 		snapshot := cacheStateDb.Snapshot()
-		_, err := ExecBasedOnRWAL(cacheStateDb, tx, header, chainCtx)
+		_, err := ExecBasedOnRWSets(cacheStateDb, tx, header, chainCtx)
 		if err != nil {
 			// 若出错则进行回滚
 			cacheStateDb.RevertToSnapshot(snapshot)
@@ -30,10 +30,10 @@ func Execute(cacheStateDb *cachestate.CacheState, txs []*types.Transaction, head
 }
 
 // 基于gopool并行执行execute函数
-func ExecuteWithGopool(statedb *state.StateDB, predictAl []*accesslist.RW_AccessLists, txGroups [][]*conflictgraph.Vertex, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) {
+func ExecuteWithGopool(statedb *state.StateDB, predictAl []*accesslist.RWSet, txGroups [][]*conflictgraph.Vertex, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) {
 	// 	从groups中组装出交易来执行
 	txsInGroup := make([][]*types.Transaction, len(txGroups))
-	als := make([][]*accesslist.RW_AccessLists, len(txGroups))
+	als := make([][]*accesslist.RWSet, len(txGroups))
 	for i := 0; i < len(txGroups); i++ {
 		for j := 0; j < len(txGroups[i]); j++ {
 			txsInGroup[i][j] = txs[txGroups[i][j].TxId]
