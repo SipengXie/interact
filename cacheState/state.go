@@ -372,3 +372,17 @@ func prefetchSetter(element accesslist.Byte52, s *CacheState, statedb *state.Sta
 		s.SetState(addr, hash, statedb.GetState(addr, hash))
 	}
 }
+
+func (s *CacheState) MerageState(statedb *state.StateDB) {
+	// 将状态合并到原有stateDB(直接set)
+	for addr, aoj := range s.Accounts {
+		// 将Data依次进行Set
+		statedb.SetBalance(addr, aoj.GetBalance())
+		statedb.SetNonce(addr, aoj.GetNonce())
+		statedb.SetCode(addr, aoj.Code())
+		for slot, value := range aoj.CacheStorage {
+			statedb.SetState(addr, slot, value)
+		}
+		// root 应该不需要再set
+	}
+}
