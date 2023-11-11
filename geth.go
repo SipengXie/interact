@@ -60,10 +60,23 @@ func PredictRWAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend state
 	if err != nil {
 		fmt.Println("NIL tx hash:", tx.Hash())
 	}
-	// listJSON := list.ToJSON()
-	// b := common.Hex2Bytes(listJSON)
-	// fmt.Println("Tx Hash is:", tx.Hash())
-	// fmt.Println(string(b))
+	return list
+}
+
+// PredictOldAL 获取预测的OldAccessList，即在不更新StateDB的条件下执行交易获取OldAccessList
+func PredictOldAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) *accesslist.AccessList {
+
+	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
+	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
+
+	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
+	if err != nil {
+		panic(err)
+	}
+
+	headHash := rawdb.ReadCanonicalHash(chainDB, num)
+	header := rawdb.ReadHeader(chainDB, headHash, num)
+	list, _ := tracer.CreateOldAL(state, tx, header)
 
 	return list
 }
