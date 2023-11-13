@@ -80,13 +80,13 @@ func (object *accountObject) SetCode(codeHash common.Hash, code []byte) {
 	object.ByteCode = code
 }
 
-func (object *accountObject) GetStorageState(key common.Hash) common.Hash {
+func (object *accountObject) GetStorageState(key common.Hash) (common.Hash, bool) {
 	value, exist := object.CacheStorage[key]
 	if exist {
 		// fmt.Println("exist cache ", " key: ", key, " value: ", value)
-		return value
+		return value, true
 	}
-	return common.Hash{}
+	return common.Hash{}, false
 }
 
 func (object *accountObject) SetStorageState(key, value common.Hash) {

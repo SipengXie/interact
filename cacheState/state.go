@@ -37,12 +37,12 @@ type revision struct {
 type CacheState struct {
 	Accounts map[common.Address]*accountObject `json:"accounts,omitempty"`
 
-	Logs       map[common.Hash][]*types.Log `json:"logs,omitempty"`
-	thash      common.Hash
-	txIndex    int
-	logSize    uint
-	stateJudge bool
-
+	Logs           map[common.Hash][]*types.Log `json:"logs,omitempty"`
+	thash          common.Hash
+	txIndex        int
+	logSize        uint
+	stateJudge     bool
+	prefetching    bool
 	Journal        *journal `json:"journal,omitempty"`
 	ValidRevisions []revision
 	NextRevisionId int
@@ -50,10 +50,11 @@ type CacheState struct {
 
 func NewStateDB() *CacheState {
 	return &CacheState{
-		Accounts:   make(map[common.Address]*accountObject),
-		Journal:    newJournal(),
-		Logs:       make(map[common.Hash][]*types.Log),
-		stateJudge: true,
+		Accounts:    make(map[common.Address]*accountObject),
+		Journal:     newJournal(),
+		Logs:        make(map[common.Hash][]*types.Log),
+		stateJudge:  true,
+		prefetching: false,
 	}
 }
 
@@ -74,15 +75,20 @@ func (accSt *CacheState) getOrsetAccountObject(addr common.Address) *accountObje
 	get := accSt.getAccountObject(addr)
 	if get != nil {
 		return get
-	}
+	} else {
+		// 若取不出accountObject且此时不为prefetch时则将stateJudge置为false
+		if !accSt.prefetching {
+			accSt.stateJudge = false
+			return nil
+		}
+	} // TODO： 若时account返回nil会产生报错
 	set := newAccountObject(addr, accountData{})
 	accSt.setAccountObject(set)
 	return set
 }
 
-// CreateAccount 创建账户接口
+// CreateAccount 创建账户接口(该方法不管是在prefetch时还是在正常执行时都可以被正常调用）
 func (accSt *CacheState) CreateAccount(addr common.Address) {
-
 	if accSt.getAccountObject(addr) != nil {
 		// 我们忽略addr冲突的情况
 		return
@@ -203,9 +209,16 @@ func (accSt *CacheState) GetCommittedState(addr common.Address, key common.Hash)
 
 // GetState 和SetState 是用于保存合约执行时 存储的变量是否发生变化 evm对变量存储的改变消耗的gas是有区别的
 func (accSt *CacheState) GetState(addr common.Address, key common.Hash) common.Hash {
-	stateObject := accSt.getAccountObject(addr)
+	stateObject := accSt.getOrsetAccountObject(addr)
 	if stateObject != nil {
-		return stateObject.GetStorageState(key)
+		val, ok := stateObject.GetStorageState(key)
+		// 若成功取出则无事发生
+		if ok {
+			return val
+		}
+		// 若失败，将stateJudge置为false
+		accSt.stateJudge = false
+		return common.Hash{}
 	}
 	return common.Hash{}
 }
@@ -215,8 +228,22 @@ func (accSt *CacheState) SetState(addr common.Address, key common.Hash, value co
 	stateObject := accSt.getOrsetAccountObject(addr)
 	if stateObject != nil {
 		// fmt.Printf("SetState key: %x value: %s", key, new(big.Int).SetBytes(value[:]).String())
-		accSt.Journal.append(storageChange{&addr, key, stateObject.GetStorageState(key)})
-		stateObject.SetStorageState(key, value)
+		// 若是prefetching则正常执行
+		if accSt.prefetching {
+			// val, _ := stateObject.GetStorageState(key)
+			// accSt.Journal.append(storageChange{&addr, key, val})
+			stateObject.SetStorageState(key, value)
+		} else {
+			// 执行时若取不出slot则将stateJudge置为false
+			val, ok := stateObject.GetStorageState(key)
+			// 若成功取出则无事发生
+			if ok {
+				accSt.Journal.append(storageChange{&addr, key, val})
+				stateObject.SetStorageState(key, value)
+			}
+			// 若失败，将stateJudge置为false
+			accSt.stateJudge = false
+		}
 	}
 }
 
@@ -351,29 +378,26 @@ func (s *CacheState) SetTxStateErr(thash common.Hash, ti int) {
 	s.stateJudge = false
 }
 
-// 若存在无法读取或写入的地址orslot，将stateJudge置为false
-func (s *CacheState) SetTxStateErr(thash common.Hash, ti int) {
-	s.thash = thash
-	s.txIndex = ti
-	s.stateJudge = false
-}
-
 func (s *CacheState) Prefetch(statedb *state.StateDB, rwSets []*accesslist.RWSet) {
+	// 预取时置prefetching为true
+	s.prefetching = true
 	for _, rwSet := range rwSets {
 		for addr, State := range rwSet.ReadSet {
 			for hash := range State {
-				prefetchSetter(addr, hash, s, statedb)
+				s.prefetchSetter(addr, hash, statedb)
 			}
 		}
 		for addr, State := range rwSet.WriteSet {
 			for hash := range State {
-				prefetchSetter(addr, hash, s, statedb)
+				s.prefetchSetter(addr, hash, statedb)
 			}
 		}
 	}
+	// 预取结束后置prefetching为false
+	s.prefetching = false
 }
 
-func prefetchSetter(addr common.Address, hash common.Hash, s *CacheState, statedb *state.StateDB) {
+func (s *CacheState) prefetchSetter(addr common.Address, hash common.Hash, statedb *state.StateDB) {
 	s.CreateAccount(addr)
 	switch hash {
 	case accesslist.BALANCE:
