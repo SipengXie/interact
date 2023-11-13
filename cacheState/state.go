@@ -316,7 +316,7 @@ func (accSt *CacheState) AddSlotToAccessList(addr common.Address, slot common.Ha
 
 // SlotInAccessList returns true if the given (address, slot)-tuple is in the access list.
 func (accSt *CacheState) SlotInAccessList(addr common.Address, slot common.Hash) (addressPresent bool, slotPresent bool) {
-	return false, false
+	return true, true
 }
 
 // RevertToSnapshot ...
@@ -360,7 +360,7 @@ func (accSt *CacheState) Prepare(rules params.Rules, sender, coinbase common.Add
 
 // AddressInAccessList returns true if the given address is in the access list.
 func (accSt *CacheState) AddressInAccessList(addr common.Address) bool {
-	return false
+	return true
 }
 
 // SetTxContext sets the current transaction hash and index which are
