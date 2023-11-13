@@ -2,7 +2,6 @@ package accesslist
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -15,118 +14,85 @@ var (
 	ALIVE    = common.Hash(sha256.Sum256([]byte("alive")))
 )
 
-type Byte52 [52]byte
+type State map[common.Hash]struct{}
 
-type ALTuple map[Byte52]struct{}
-
-func Combine(addr common.Address, hash common.Hash) Byte52 {
-	var key Byte52
-	copy(key[:], addr[:])
-	copy(key[20:], hash[:])
-	return key
-}
+type ALTuple map[common.Address]State
 
 func (tuple ALTuple) Add(addr common.Address, hash common.Hash) {
-	key := Combine(addr, hash)
-	if _, ok := tuple[key]; ok {
-		return
-	}
-	tuple[key] = struct{}{}
+	tuple[addr][hash] = struct{}{}
 }
 
-func (tuple ALTuple) Contains(key Byte52) bool {
-	_, ok := tuple[key]
+func (tuple ALTuple) Contains(addr common.Address, hash common.Hash) bool {
+	_, ok := tuple[addr][hash]
 	return ok
 }
 
-type RW_AccessLists struct {
-	ReadAL  ALTuple
-	WriteAL ALTuple
+type RWSet struct {
+	ReadSet  ALTuple
+	WriteSet ALTuple
 }
 
-func NewRWAccessLists() *RW_AccessLists {
-	return &RW_AccessLists{
-		ReadAL:  make(ALTuple),
-		WriteAL: make(ALTuple),
+func NewRWAccessLists() *RWSet {
+	return &RWSet{
+		ReadSet:  make(ALTuple),
+		WriteSet: make(ALTuple),
 	}
 }
 
-func (RWAL RW_AccessLists) AddReadAL(addr common.Address, hash common.Hash) {
-	RWAL.ReadAL.Add(addr, hash)
+func (RWSets RWSet) AddReadSet(addr common.Address, hash common.Hash) {
+	RWSets.ReadSet.Add(addr, hash)
 }
 
-func (RWAL RW_AccessLists) AddWriteAL(addr common.Address, hash common.Hash) {
-	RWAL.WriteAL.Add(addr, hash)
+func (RWSets RWSet) AddWriteSet(addr common.Address, hash common.Hash) {
+	RWSets.WriteSet.Add(addr, hash)
 }
 
-func (RWAL RW_AccessLists) HasConflict(other RW_AccessLists) bool {
-	for key := range RWAL.ReadAL {
-		if other.WriteAL.Contains(key) {
-			return true
+func (RWSets RWSet) HasConflict(other RWSet) bool {
+	for addr, state := range RWSets.ReadSet {
+		for hash := range state {
+			if other.WriteSet.Contains(addr, hash) {
+				return true
+			}
 		}
 	}
-	for key := range RWAL.WriteAL {
-		if other.WriteAL.Contains(key) {
-			return true
-		}
-		if other.ReadAL.Contains(key) {
-			return true
+	for addr, state := range RWSets.WriteSet {
+		for hash := range state {
+			if other.WriteSet.Contains(addr, hash) {
+				return true
+			}
+			if other.ReadSet.Contains(addr, hash) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
-func (RWAL RW_AccessLists) Merge(other RW_AccessLists) {
-	for key := range other.ReadAL {
-		RWAL.ReadAL.Add(common.BytesToAddress(key[:20]), common.BytesToHash(key[20:]))
-	}
-	for key := range other.WriteAL {
-		RWAL.WriteAL.Add(common.BytesToAddress(key[:20]), common.BytesToHash(key[20:]))
-	}
-}
-
-func (RWAL RW_AccessLists) ToMarshal() RW_AccessLists_Marshal {
-	readSet := make(map[common.Address][]string)
-	writeSet := make(map[common.Address][]string)
-	for key := range RWAL.ReadAL {
-		addr := common.BytesToAddress(key[:20])
-		hash := common.BytesToHash(key[20:])
-		readSet[addr] = append(readSet[addr], decodeHash(hash))
-	}
-	for key := range RWAL.WriteAL {
-		addr := common.BytesToAddress(key[:20])
-		hash := common.BytesToHash(key[20:])
-		writeSet[addr] = append(writeSet[addr], decodeHash(hash))
-	}
-	return RW_AccessLists_Marshal{
-		ReadSet:  readSet,
-		WriteSet: writeSet,
-	}
-}
-
-func (RWAL RW_AccessLists) Equal(other RW_AccessLists) bool {
-	if len(RWAL.ReadAL) != len(other.ReadAL) {
+func (RWSets RWSet) Equal(other RWSet) bool {
+	if len(RWSets.ReadSet) != len(other.ReadSet) {
 		return false
 	}
-	if len(RWAL.WriteAL) != len(other.WriteAL) {
+	if len(RWSets.WriteSet) != len(other.WriteSet) {
 		return false
 	}
-	for key := range RWAL.ReadAL {
-		if !other.ReadAL.Contains(key) {
-			return false
+
+	for addr, state := range RWSets.ReadSet {
+		for hash := range state {
+			if !other.ReadSet.Contains(addr, hash) {
+				return false
+			}
 		}
 	}
-	for key := range RWAL.WriteAL {
-		if !other.WriteAL.Contains(key) {
-			return false
+
+	for addr, state := range RWSets.WriteSet {
+		for hash := range state {
+			if !other.WriteSet.Contains(addr, hash) {
+				return false
+			}
 		}
 	}
+
 	return true
-}
-
-func (RWAL RW_AccessLists) ToJSON() string {
-	str, _ := json.Marshal(RWAL.ToMarshal())
-	return common.Bytes2Hex(str)
 }
 
 func decodeHash(hash common.Hash) string {
@@ -163,29 +129,29 @@ func encodeHash(str string) common.Hash {
 	}
 }
 
-type RW_AccessLists_Marshal struct {
-	ReadSet  map[common.Address][]string `json:"readSet"`
-	WriteSet map[common.Address][]string `json:"writeSet"`
-}
+func (RWSets RWSet) ToJsonStruct() RWSetJson {
+	readAL := make(map[common.Address][]string)
+	writeAL := make(map[common.Address][]string)
 
-func NewRWAccessListsMarshal() *RW_AccessLists_Marshal {
-	return &RW_AccessLists_Marshal{
-		ReadSet:  make(map[common.Address][]string),
-		WriteSet: make(map[common.Address][]string),
-	}
-}
-
-func (RWALM RW_AccessLists_Marshal) ToRWAL() *RW_AccessLists {
-	res := NewRWAccessLists()
-	for addr, hashList := range RWALM.ReadSet {
-		for _, hash := range hashList {
-			res.ReadAL.Add(addr, encodeHash(hash))
+	for addr, state := range RWSets.ReadSet {
+		for hash := range state {
+			readAL[addr] = append(readAL[addr], decodeHash(hash))
 		}
 	}
-	for addr, hashList := range RWALM.WriteSet {
-		for _, hash := range hashList {
-			res.WriteAL.Add(addr, encodeHash(hash))
+
+	for addr, state := range RWSets.WriteSet {
+		for hash := range state {
+			writeAL[addr] = append(writeAL[addr], decodeHash(hash))
 		}
 	}
-	return res
+
+	return RWSetJson{
+		ReadSet:  readAL,
+		WriteSet: writeAL,
+	}
+}
+
+type RWSetJson struct {
+	ReadSet  map[common.Address][]string `json:"readAL"`
+	WriteSet map[common.Address][]string `json:"writeAL"`
 }

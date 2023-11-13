@@ -8,6 +8,7 @@ import (
 	"interact/mis"
 	"interact/tracer"
 	"os"
+	"time"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	statedb "github.com/ethereum/go-ethereum/core/state"
@@ -43,7 +44,7 @@ func GetEthDatabaseAndStateDatabase() (*node.Node, ethdb.Database, statedb.Datab
 	return Node, chainDB, sdbBackend
 }
 
-func PredictRWAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) *accesslist.RW_AccessLists {
+func PredictRWSets(tx *types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) *accesslist.RWSet {
 
 	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
 	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
@@ -56,7 +57,7 @@ func PredictRWAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend state
 	headHash := rawdb.ReadCanonicalHash(chainDB, num)
 	header := rawdb.ReadHeader(chainDB, headHash, num)
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
-	list, err := tracer.ExecBasedOnRWAL(state, tx, header, fakeChainCtx)
+	list, err := tracer.ExecBasedOnRWSets(state, tx, header, fakeChainCtx)
 	if err != nil {
 		fmt.Println("NIL tx hash:", tx.Hash())
 	}
@@ -107,7 +108,7 @@ func OldTrueALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend sta
 	return lists, nil
 }
 
-func TrueRWALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) ([]*accesslist.RW_AccessLists, error) {
+func TrueRWSetss(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) ([]*accesslist.RWSet, error) {
 	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
 	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
 
@@ -120,10 +121,10 @@ func TrueRWALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend stat
 	header := rawdb.ReadHeader(chainDB, headHash, num)
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
-	lists, errs := tracer.CreateRWALWithTransactions(state, txs, header, fakeChainCtx)
+	lists, errs := tracer.CreateRWSetsWithTransactions(state, txs, header, fakeChainCtx)
 	for i, err := range errs {
 		if err != nil {
-			fmt.Println("In TRUERWALS, tx hash:", txs[i].Hash())
+			fmt.Println("In TRUERWSetsS, tx hash:", txs[i].Hash())
 			panic(err)
 		}
 	}
@@ -140,14 +141,14 @@ func IterateBlock(chainDB ethdb.Database, sdbBackend statedb.Database, startHeig
 		Block := rawdb.ReadBlock(chainDB, headHash, num)
 		txs := Block.Transactions()
 
-		trueLists, err := TrueRWALs(txs, chainDB, sdbBackend, num)
+		trueLists, err := TrueRWSetss(txs, chainDB, sdbBackend, num)
 		if err != nil {
 			break
 		}
 
-		predictLists := make([]*accesslist.RW_AccessLists, txs.Len())
+		predictLists := make([]*accesslist.RWSet, txs.Len())
 		for i, tx := range txs {
-			predictLists[i] = PredictRWAL(tx, chainDB, sdbBackend, num)
+			predictLists[i] = PredictRWSets(tx, chainDB, sdbBackend, num)
 		}
 		nilCounter := 0
 		conflictCounter := 0
@@ -217,6 +218,26 @@ func SolveMISInTurn(undiConfGraph *conflictgraph.UndirectedGraph) {
 			break
 		}
 	}
+}
+
+// serial execution test
+func SerialExecuteTest(chainDB ethdb.Database, sdbBackend statedb.Database) {
+	// set the satrt time
+	start := time.Now()
+
+	// cal the execution time
+	elapsed := time.Since(start)
+	fmt.Println("Serial Execution Time:", elapsed)
+}
+
+// parallel execution test
+func ParallelExecuteTest(chainDB ethdb.Database, sdbBackend statedb.Database) {
+	// set the satrt time
+	start := time.Now()
+
+	// cal the execution time
+	elapsed := time.Since(start)
+	fmt.Println("Serial Execution Time:", elapsed)
 }
 
 func main() {

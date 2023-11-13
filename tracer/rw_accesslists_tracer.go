@@ -22,26 +22,26 @@ var (
 // Tracer mainly records the accesslist of each transaction during vm execution (interpreter.run)
 type RW_AccessListsTracer struct {
 	excl map[common.Address]struct{} // only excludes those stateless precompile contracts
-	list *accesslist.RW_AccessLists
+	list *accesslist.RWSet
 }
 
-func NewRWAccessListTracer(rwAL *accesslist.RW_AccessLists, precompiles []common.Address) *RW_AccessListsTracer {
+func NewRWAccessListTracer(RWSets *accesslist.RWSet, precompiles []common.Address) *RW_AccessListsTracer {
 	excl := make(map[common.Address]struct{})
 	for _, addr := range precompiles {
 		excl[addr] = struct{}{}
 	}
 	rwList := accesslist.NewRWAccessLists()
-	if rwAL != nil {
-		for key := range rwAL.ReadAL {
+	if RWSets != nil {
+		for key := range RWSets.ReadSet {
 			addr := common.BytesToAddress(key[:20])
 			if _, ok := excl[addr]; !ok {
-				rwList.ReadAL.Add(addr, common.BytesToHash(key[20:]))
+				rwList.ReadSet.Add(addr, common.BytesToHash(key[20:]))
 			}
 		}
-		for key := range rwAL.WriteAL {
+		for key := range RWSets.WriteSet {
 			addr := common.BytesToAddress(key[:20])
 			if _, ok := excl[addr]; !ok {
-				rwList.WriteAL.Add(addr, common.BytesToHash(key[20:]))
+				rwList.WriteSet.Add(addr, common.BytesToHash(key[20:]))
 			}
 		}
 	}
@@ -64,14 +64,14 @@ func (a *RW_AccessListsTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost u
 		{
 			if stackLen >= 1 {
 				slot := common.Hash(stackData[stackLen-1].Bytes32())
-				a.list.AddReadAL(scope.Contract.Address(), slot)
+				a.list.AddReadSet(scope.Contract.Address(), slot)
 			}
 		}
 	case vm.SSTORE:
 		{
 			if stackLen >= 1 {
 				slot := common.Hash(stackData[stackLen-1].Bytes32())
-				a.list.AddWriteAL(scope.Contract.Address(), slot)
+				a.list.AddWriteSet(scope.Contract.Address(), slot)
 			}
 		}
 	case vm.EXTCODECOPY: // read code
@@ -79,7 +79,7 @@ func (a *RW_AccessListsTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost u
 			if stackLen >= 1 {
 				addr := common.Address(stackData[stackLen-1].Bytes20())
 				if _, ok := a.excl[addr]; !ok {
-					a.list.AddReadAL(addr, CODE)
+					a.list.AddReadSet(addr, CODE)
 				}
 			}
 		}
@@ -88,7 +88,7 @@ func (a *RW_AccessListsTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost u
 			if stackLen >= 1 {
 				addr := common.Address(stackData[stackLen-1].Bytes20())
 				if _, ok := a.excl[addr]; !ok {
-					a.list.AddReadAL(addr, CODEHASH)
+					a.list.AddReadSet(addr, CODEHASH)
 				}
 			}
 		}
@@ -97,7 +97,7 @@ func (a *RW_AccessListsTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost u
 			if stackLen >= 1 {
 				addr := common.Address(stackData[stackLen-1].Bytes20())
 				if _, ok := a.excl[addr]; !ok {
-					a.list.AddReadAL(addr, CODE)
+					a.list.AddReadSet(addr, CODE)
 				}
 			}
 		}
@@ -106,7 +106,7 @@ func (a *RW_AccessListsTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost u
 			if stackLen >= 1 {
 				addr := common.Address(stackData[stackLen-1].Bytes20())
 				if _, ok := a.excl[addr]; !ok {
-					a.list.AddReadAL(addr, BALANCE)
+					a.list.AddReadSet(addr, BALANCE)
 				}
 			}
 		}
@@ -115,13 +115,13 @@ func (a *RW_AccessListsTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost u
 			if stackLen >= 1 {
 				beneficiary := common.Address(stackData[stackLen-1].Bytes20())
 				if _, ok := a.excl[beneficiary]; !ok {
-					a.list.AddReadAL(beneficiary, BALANCE)
-					a.list.AddWriteAL(beneficiary, BALANCE)
+					a.list.AddReadSet(beneficiary, BALANCE)
+					a.list.AddWriteSet(beneficiary, BALANCE)
 				}
 				addr := scope.Contract.Address()
 				if _, ok := a.excl[addr]; !ok {
-					a.list.AddWriteAL(addr, BALANCE)
-					a.list.AddWriteAL(addr, ALIVE)
+					a.list.AddWriteSet(addr, BALANCE)
+					a.list.AddWriteSet(addr, ALIVE)
 				}
 			}
 		}
@@ -132,18 +132,18 @@ func (a *RW_AccessListsTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost u
 				to := common.Address(stackData[stackLen-2].Bytes20())
 				value := stackData[stackLen-3].ToBig()
 				if _, ok := a.excl[from]; !ok {
-					a.list.AddReadAL(from, BALANCE)
-					a.list.AddWriteAL(from, BALANCE)
-					a.list.AddReadAL(from, NONCE)
-					a.list.AddWriteAL(from, NONCE)
+					a.list.AddReadSet(from, BALANCE)
+					a.list.AddWriteSet(from, BALANCE)
+					a.list.AddReadSet(from, NONCE)
+					a.list.AddWriteSet(from, NONCE)
 				}
 				if _, ok := a.excl[to]; !ok {
-					a.list.AddReadAL(to, CODE)
-					a.list.AddReadAL(to, CODEHASH)
+					a.list.AddReadSet(to, CODE)
+					a.list.AddReadSet(to, CODEHASH)
 					// if value == 0, we could determine thta to-balance won't be touched
 					if value.Cmp(common.Big0) != 0 {
-						a.list.AddReadAL(to, BALANCE)
-						a.list.AddWriteAL(to, BALANCE)
+						a.list.AddReadSet(to, BALANCE)
+						a.list.AddWriteSet(to, BALANCE)
 					}
 				}
 			}
@@ -153,8 +153,8 @@ func (a *RW_AccessListsTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost u
 			if stackLen >= 5 {
 				to := common.Address(stackData[stackLen-2].Bytes20())
 				if _, ok := a.excl[to]; !ok {
-					a.list.AddReadAL(to, CODE)
-					a.list.AddReadAL(to, CODEHASH)
+					a.list.AddReadSet(to, CODE)
+					a.list.AddReadSet(to, CODEHASH)
 				}
 			}
 		}
@@ -163,10 +163,10 @@ func (a *RW_AccessListsTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost u
 			if stackLen >= 4 {
 				from := scope.Contract.Address()
 				if _, ok := a.excl[from]; !ok {
-					a.list.AddReadAL(from, BALANCE)
-					a.list.AddWriteAL(from, BALANCE)
-					a.list.AddReadAL(from, NONCE)
-					a.list.AddWriteAL(from, NONCE)
+					a.list.AddReadSet(from, BALANCE)
+					a.list.AddWriteSet(from, BALANCE)
+					a.list.AddReadSet(from, NONCE)
+					a.list.AddWriteSet(from, NONCE)
 				}
 
 				offset, size := stackData[stackLen-2].Uint64(), stackData[stackLen-3].Uint64()
@@ -175,14 +175,14 @@ func (a *RW_AccessListsTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost u
 				codeHash := crypto.Keccak256Hash(input)
 				addr := crypto.CreateAddress2(scope.Contract.Address(), salt, codeHash.Bytes())
 				if _, ok := a.excl[addr]; !ok {
-					a.list.AddWriteAL(addr, BALANCE)
-					a.list.AddWriteAL(addr, CODEHASH)
-					a.list.AddWriteAL(addr, CODE)
-					a.list.AddWriteAL(addr, NONCE)
-					a.list.AddWriteAL(addr, ALIVE)
+					a.list.AddWriteSet(addr, BALANCE)
+					a.list.AddWriteSet(addr, CODEHASH)
+					a.list.AddWriteSet(addr, CODE)
+					a.list.AddWriteSet(addr, NONCE)
+					a.list.AddWriteSet(addr, ALIVE)
 					// Read to check if the contract addr is already occupied
-					a.list.AddReadAL(addr, NONCE)
-					a.list.AddReadAL(addr, CODEHASH)
+					a.list.AddReadSet(addr, NONCE)
+					a.list.AddReadSet(addr, CODEHASH)
 				}
 			}
 		}
@@ -204,6 +204,6 @@ func (*RW_AccessListsTracer) CaptureTxStart(gasLimit uint64) {}
 func (*RW_AccessListsTracer) CaptureTxEnd(restGas uint64) {}
 
 // AccessList returns the current accesslist maintained by the tracer.
-func (a *RW_AccessListsTracer) RWAccessList() *accesslist.RW_AccessLists {
+func (a *RW_AccessListsTracer) RWAccessList() *accesslist.RWSet {
 	return a.list
 }

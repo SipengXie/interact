@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-func ExecBasedOnRWAL(statedb vm.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RW_AccessLists, error) {
+func ExecBasedOnRWSets(statedb vm.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RWSet, error) {
 	from, _ := types.Sender(types.LatestSigner(params.MainnetChainConfig), tx)
 	var to common.Address = common.Address{}
 	if tx.To() != nil {
@@ -30,33 +30,33 @@ func ExecBasedOnRWAL(statedb vm.StateDB, tx *types.Transaction, header *types.He
 	tracer := NewRWAccessListTracer(nil, precompiles)
 	// 新建合约交易
 	if isCreate {
-		tracer.list.AddReadAL(from, BALANCE)
-		tracer.list.AddWriteAL(from, BALANCE)
-		tracer.list.AddReadAL(from, NONCE)
-		tracer.list.AddWriteAL(from, NONCE)
+		tracer.list.AddReadSet(from, BALANCE)
+		tracer.list.AddWriteSet(from, BALANCE)
+		tracer.list.AddReadSet(from, NONCE)
+		tracer.list.AddWriteSet(from, NONCE)
 
-		tracer.list.AddWriteAL(to, BALANCE)
-		tracer.list.AddWriteAL(to, CODEHASH)
-		tracer.list.AddWriteAL(to, CODE)
-		tracer.list.AddWriteAL(to, NONCE)
-		tracer.list.AddWriteAL(to, ALIVE)
+		tracer.list.AddWriteSet(to, BALANCE)
+		tracer.list.AddWriteSet(to, CODEHASH)
+		tracer.list.AddWriteSet(to, CODE)
+		tracer.list.AddWriteSet(to, NONCE)
+		tracer.list.AddWriteSet(to, ALIVE)
 		// Read to check if the contract to is already occupied
-		tracer.list.AddReadAL(to, NONCE)
-		tracer.list.AddReadAL(to, CODEHASH)
+		tracer.list.AddReadSet(to, NONCE)
+		tracer.list.AddReadSet(to, CODEHASH)
 	} else {
-		tracer.list.AddReadAL(from, BALANCE)
-		tracer.list.AddWriteAL(from, BALANCE)
-		tracer.list.AddReadAL(from, NONCE)
-		tracer.list.AddWriteAL(from, NONCE)
+		tracer.list.AddReadSet(from, BALANCE)
+		tracer.list.AddWriteSet(from, BALANCE)
+		tracer.list.AddReadSet(from, NONCE)
+		tracer.list.AddWriteSet(from, NONCE)
 
-		tracer.list.AddReadAL(to, CODE)
-		tracer.list.AddReadAL(to, CODEHASH)
+		tracer.list.AddReadSet(to, CODE)
+		tracer.list.AddReadSet(to, CODEHASH)
 
 		// if value == 0, we could determine thta to-balance won't be touched
 		value := tx.Value()
 		if value.Cmp(common.Big0) != 0 {
-			tracer.list.AddReadAL(to, BALANCE)
-			tracer.list.AddWriteAL(to, BALANCE)
+			tracer.list.AddReadSet(to, BALANCE)
+			tracer.list.AddWriteSet(to, BALANCE)
 		}
 
 	}
@@ -149,11 +149,11 @@ func ChangeAccessList(tracer accessList) *accesslist.AccessList {
 	return al
 }
 
-func CreateRWALWithTransactions(db *state.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RW_AccessLists, []error) {
-	ret := make([]*accesslist.RW_AccessLists, len(txs))
+func CreateRWSetsWithTransactions(db *state.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RWSet, []error) {
+	ret := make([]*accesslist.RWSet, len(txs))
 	err := make([]error, len(txs))
 	for i, tx := range txs {
-		ret[i], err[i] = ExecBasedOnRWAL(db, tx, header, chainCtx)
+		ret[i], err[i] = ExecBasedOnRWSets(db, tx, header, chainCtx)
 	}
 	return ret, err
 }

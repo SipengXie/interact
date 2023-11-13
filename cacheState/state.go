@@ -351,20 +351,29 @@ func (s *CacheState) SetTxStateErr(thash common.Hash, ti int) {
 	s.stateJudge = false
 }
 
-func (s *CacheState) Prefetch(statedb *state.StateDB, rwSets []*accesslist.RW_AccessLists) {
+// 若存在无法读取或写入的地址orslot，将stateJudge置为false
+func (s *CacheState) SetTxStateErr(thash common.Hash, ti int) {
+	s.thash = thash
+	s.txIndex = ti
+	s.stateJudge = false
+}
+
+func (s *CacheState) Prefetch(statedb *state.StateDB, rwSets []*accesslist.RWSet) {
 	for _, rwSet := range rwSets {
-		for element := range rwSet.ReadAL {
-			prefetchSetter(element, s, statedb)
+		for addr, State := range rwSet.ReadSet {
+			for hash := range State {
+				prefetchSetter(addr, hash, s, statedb)
+			}
 		}
-		for element := range rwSet.WriteAL {
-			prefetchSetter(element, s, statedb)
+		for addr, State := range rwSet.WriteSet {
+			for hash := range State {
+				prefetchSetter(addr, hash, s, statedb)
+			}
 		}
 	}
 }
 
-func prefetchSetter(element accesslist.Byte52, s *CacheState, statedb *state.StateDB) {
-	addr := common.BytesToAddress(element[:20])
-	hash := common.BytesToHash(element[20:])
+func prefetchSetter(addr common.Address, hash common.Hash, s *CacheState, statedb *state.StateDB) {
 	s.CreateAccount(addr)
 	switch hash {
 	case accesslist.BALANCE:
