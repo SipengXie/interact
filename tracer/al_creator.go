@@ -1,7 +1,9 @@
 package tracer
 
 import (
+	"errors"
 	"interact/accesslist"
+	cachestate "interact/cacheState"
 	"interact/core"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -11,6 +13,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+var ErrFalsePredict error = errors.New("False Predict List")
 
 func ExecBasedOnRWSets(statedb vm.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RWSet, error) {
 	from, _ := types.Sender(types.LatestSigner(params.MainnetChainConfig), tx)
@@ -76,6 +80,17 @@ func ExecBasedOnRWSets(statedb vm.StateDB, tx *types.Transaction, header *types.
 	if err != nil {
 		return nil, err // TODO: handle error
 	}
+
+	switch statedb.(type) {
+	case *cachestate.CacheState:
+		if statedb.(*cachestate.CacheState).StateJudge == false {
+			statedb.(*cachestate.CacheState).StateJudge = true
+			return nil, ErrFalsePredict
+		}
+	default:
+		break
+	}
+
 	return tracer.list, nil
 }
 
@@ -149,7 +164,7 @@ func ChangeAccessList(tracer accessList) *accesslist.AccessList {
 	return al
 }
 
-func CreateRWSetsWithTransactions(db *state.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RWSet, []error) {
+func CreateRWSetsWithTransactions(db vm.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RWSet, []error) {
 	ret := make([]*accesslist.RWSet, len(txs))
 	err := make([]error, len(txs))
 	for i, tx := range txs {

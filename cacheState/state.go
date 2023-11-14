@@ -41,7 +41,7 @@ type CacheState struct {
 	thash          common.Hash
 	txIndex        int
 	logSize        uint
-	stateJudge     bool
+	StateJudge     bool
 	prefetching    bool
 	Journal        *journal `json:"journal,omitempty"`
 	ValidRevisions []revision
@@ -53,7 +53,7 @@ func NewStateDB() *CacheState {
 		Accounts:    make(map[common.Address]*accountObject),
 		Journal:     newJournal(),
 		Logs:        make(map[common.Hash][]*types.Log),
-		stateJudge:  true,
+		StateJudge:  true,
 		prefetching: false,
 	}
 }
@@ -78,7 +78,7 @@ func (accSt *CacheState) getOrsetAccountObject(addr common.Address) *accountObje
 	} else {
 		// 若取不出accountObject且此时不为prefetch时则将stateJudge置为false
 		if !accSt.prefetching {
-			accSt.stateJudge = false
+			accSt.StateJudge = false
 			return nil
 		}
 	} // TODO： 若时account返回nil会产生报错
@@ -215,9 +215,10 @@ func (accSt *CacheState) GetState(addr common.Address, key common.Hash) common.H
 		// 若成功取出则无事发生
 		if ok {
 			return val
+		} else {
+			// 若失败，将stateJudge置为false
+			accSt.StateJudge = false
 		}
-		// 若失败，将stateJudge置为false
-		accSt.stateJudge = false
 		return common.Hash{}
 	}
 	return common.Hash{}
@@ -240,9 +241,10 @@ func (accSt *CacheState) SetState(addr common.Address, key common.Hash, value co
 			if ok {
 				accSt.Journal.append(storageChange{&addr, key, val})
 				stateObject.SetStorageState(key, value)
+			} else {
+				// 若失败，将stateJudge置为false
+				accSt.StateJudge = false
 			}
-			// 若失败，将stateJudge置为false
-			accSt.stateJudge = false
 		}
 	}
 }
@@ -375,7 +377,7 @@ func (s *CacheState) SetTxContext(thash common.Hash, ti int) {
 func (s *CacheState) SetTxStateErr(thash common.Hash, ti int) {
 	s.thash = thash
 	s.txIndex = ti
-	s.stateJudge = false
+	s.StateJudge = false
 }
 
 func (s *CacheState) Prefetch(statedb *state.StateDB, rwSets []*accesslist.RWSet) {
