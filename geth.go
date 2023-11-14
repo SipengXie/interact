@@ -9,9 +9,11 @@ import (
 	"interact/mis"
 	"interact/tracer"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/state"
 	statedb "github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -29,7 +31,7 @@ func GetEthDatabaseAndStateDatabase() (*node.Node, ethdb.Database, statedb.Datab
 		panic(err)
 	}
 	ethCfg := ethconfig.Defaults
-	chainDB, err := Node.OpenDatabaseWithFreezer("chaindata", ethCfg.DatabaseCache, ethCfg.DatabaseHandles, ethCfg.DatabaseFreezer, "eth/db/chaindata/", true)
+	chainDB, err := Node.OpenDatabase("chaindata", ethCfg.DatabaseCache, ethCfg.DatabaseHandles, "eth/db/chaindata/", true)
 	if err != nil {
 		panic(err)
 	}
@@ -222,31 +224,56 @@ func SolveMISInTurn(undiConfGraph *conflictgraph.UndirectedGraph) {
 	}
 }
 
-// serial execution test
-func SerialExecuteTest(statedb vm.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) {
-	// set the satrt time
-	start := time.Now()
-
-	// execute the transactions
-	tracer.Execute(statedb, txs, header, chainCtx)
-
-	// cal the execution time
-	elapsed := time.Since(start)
-	fmt.Println("Serial Execution Time:", elapsed)
+func GenerateVertexGroups(txs types.Transactions, predictRWSets []*accesslist.RWSet) [][]*conflictgraph.Vertex {
+	undiConfGraph := conflictgraph.NewUndirectedGraph()
+	for i, tx := range txs {
+		undiConfGraph.AddVertex(tx.Hash(), uint(i))
+	}
+	for i := 0; i < txs.Len(); i++ {
+		for j := i + 1; j < txs.Len(); j++ {
+			if predictRWSets[i] == nil || predictRWSets[j] == nil {
+				continue
+			}
+			if predictRWSets[i].HasConflict(*predictRWSets[j]) {
+				undiConfGraph.AddEdge(uint(i), uint(j))
+			}
+		}
+	}
+	groups := undiConfGraph.GetConnectedComponents()
+	return groups
 }
 
-// parallel execution test
-func ParallelExecuteTest(statedb *statedb.StateDB, predictAl []*accesslist.RWSet, txGroups [][]*conflictgraph.Vertex, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) {
-	// set the satrt time
-	start := time.Now()
+func GenerateTxAndRWSetGroups(vertexGroup [][]*conflictgraph.Vertex, txs types.Transactions, predictRWSets accesslist.RWSetList) ([]types.Transactions, []accesslist.RWSetList) {
+	// From vertex group to transaction group
+	txsGroup := make([]types.Transactions, len(vertexGroup))
+	RWSetsGroup := make([]accesslist.RWSetList, len(vertexGroup))
+	for i := 0; i < len(vertexGroup); i++ {
+		sort.Slice(vertexGroup[i], func(j, k int) bool {
+			return vertexGroup[i][j].TxId < vertexGroup[i][k].TxId
+		})
 
-	// execute the transactions
-	tracer.ExecuteWithGopool(statedb, predictAl, txGroups, txs, header, chainCtx)
+		for j := 0; j < len(vertexGroup[i]); j++ {
+			txsGroup[i] = append(txsGroup[i], txs[vertexGroup[i][j].TxId])
+			RWSetsGroup[i] = append(RWSetsGroup[i], predictRWSets[vertexGroup[i][j].TxId])
+		}
+	}
+	return txsGroup, RWSetsGroup
+}
 
-	// cal the execution time
-	elapsed := time.Since(start)
-	fmt.Println("Parallel Execution Time:", elapsed)
+func GenerateCacheStates(db vm.StateDB, RWSetsGroups []accesslist.RWSetList) cachestate.CacheStateList {
+	// cannot concurrent prefetch due to the statedb is not thread safe
+	cacheStates := make([]*cachestate.CacheState, len(RWSetsGroups))
+	for i := 0; i < len(RWSetsGroups); i++ {
+		cacheStates[i] = cachestate.NewStateDB()
+		cacheStates[i].Prefetch(db, RWSetsGroups[i])
+	}
+	return cacheStates
+}
 
+func MergeToState(cacheStates cachestate.CacheStateList, db *state.StateDB) {
+	for i := 0; i < len(cacheStates); i++ {
+		cacheStates[i].MergeState(db)
+	}
 }
 
 // two manners to execute the transactions test
@@ -270,46 +297,81 @@ func ExeTest(chainDB ethdb.Database, sdbBackend statedb.Database, blockNum uint6
 		predictRWSets[i] = PredictRWSets(tx, chainDB, sdbBackend, blockNum)
 	}
 
-	// construct the conflict graph
-	// undiConfGraph := conflictgraph.NewUndirectedGraph()
-	// for i, tx := range txs {
-	// 	undiConfGraph.AddVertex(tx.Hash(), uint(i))
-	// }
-	// for i := 0; i < txs.Len(); i++ {
-	// 	for j := i + 1; j < txs.Len(); j++ {
-	// 		if predictRWSets[i] == nil || predictRWSets[j] == nil {
-	// 			continue
-	// 		}
-	// 		if predictRWSets[i].HasConflict(*predictRWSets[j]) {
-	// 			undiConfGraph.AddEdge(uint(i), uint(j))
-	// 		}
-	// 	}
-	// }
-	// groups := undiConfGraph.GetConnectedComponents()
+	{
+		db := state.Copy()
+		// set the satrt time
+		start := time.Now()
+		// test the serial execution
+		tracer.ExecuteTxs(db, txs, header, fakeChainCtx)
+		// cal the execution time
+		elapsed := time.Since(start)
+		fmt.Println("Serial Execution Time:", elapsed)
+	}
 
-	// test the serial execution
-	// SerialExecuteTest(state, txs, header, fakeChainCtx)
+	{
+
+		db := state.Copy()
+		// set the satrt time
+		start := time.Now()
+		// construct the conflict graph
+		vertexGroups := GenerateVertexGroups(txs, predictRWSets)
+		txsGroups, RWSetsGroups := GenerateTxAndRWSetGroups(vertexGroups, txs, predictRWSets)
+		elapsed := time.Since(start)
+		fmt.Println("Generate TxGroups Costs:", elapsed)
+
+		// !!! Our Prefetch is less efficient than StateDB.Prefetch !!!
+		start = time.Now()
+		cacheStates := GenerateCacheStates(db, RWSetsGroups)
+		elapsed = time.Since(start)
+		fmt.Println("Generate CacheStates Costs:", elapsed)
+
+		// test the parallel execution
+		start = time.Now()
+		tracer.ExecuteWithGopool(txsGroups, cacheStates, header, fakeChainCtx)
+		elapsed = time.Since(start)
+		fmt.Println("Parallel Execution Time With Pool Generating:", elapsed)
+
+		// cannot concurrent merge due to the statedb is not thread safe
+		start = time.Now()
+		MergeToState(cacheStates, db)
+		elapsed = time.Since(start)
+		fmt.Println("Merge CacheStates to StateDB Costs:", elapsed)
+
+		// calc the execution time
+
+	}
 
 	// test the serial execution with CacheState
-	cacheState := cachestate.NewStateDB()
-	var txTest *types.Transaction
-	var predictRWSet *accesslist.RWSet
-	for i, tx := range txs {
-		if tx.Hash().Hex() == "0x850191a8f10a632a21b196d35ba97b7b4675ac97ab67d000a44900d292fd2f77" {
-			txTest = tx
-			predictRWSet = predictRWSets[i]
-		}
-	}
-	cacheState.Prefetch(state, []*accesslist.RWSet{predictRWSet})
-	list, err := tracer.ExecBasedOnRWSets(state, txTest, header, fakeChainCtx)
-	if err != nil {
-		fmt.Println(err)
-	} else {
-		fmt.Println(list.Equal(*predictRWSet))
-	}
+	// cacheState := cachestate.NewStateDB()
+	// cacheState.Prefetch(state, predictRWSets)
+	// _, errs := tracer.CreateRWSetsWithTransactions(cacheState, txs, header, fakeChainCtx)
+	// counter := 0
+	// for i, err := range errs {
+	// 	if err == tracer.ErrFalsePredict {
+	// 		counter++
+	// 		fmt.Println("False Prediction tx hash:", txs[i].Hash())
+	// 	} else if err != nil {
+	// 		fmt.Println("Error During Execution without immediatly addBalance to coinbase:", txs[i].Hash())
+	// 	}
+	// }
+	// fmt.Println("False Prediction Number:", counter)
 
-	// test the parallel execution
-	// ParallelExecuteTest(state, predictRWSets, groups, txs, header, fakeChainCtx)
+	// cachestate := cachestate.NewStateDB()
+	// var txTest *types.Transaction
+	// var predictSet *accesslist.RWSet
+	// for i, tx := range txs {
+	// 	if tx.Hash().Hex() == "0xa00fef3b0ffcd386183312c6be6bb5640abf5d6ec381ce0f5ba990c666a2b9f5" {
+	// 		txTest = tx
+	// 		predictSet = predictRWSets[i]
+	// 	}
+	// }
+	// b, _ := json.Marshal(predictSet.ToJsonStruct())
+	// fmt.Println(string(b))
+	// cachestate.Prefetch(state, []*accesslist.RWSet{predictSet})
+	// fmt.Println("In state, the nonce:", state.GetNonce(*txTest.To()))
+	// fmt.Println("In cache, the nonce:", cachestate.GetNonce(*txTest.To()))
+	// _, err = tracer.ExecBasedOnRWSets(cachestate, txTest, header, fakeChainCtx)
+	// fmt.Println(err)
 
 	return nil
 }

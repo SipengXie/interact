@@ -5,6 +5,7 @@ import (
 	"interact/accesslist"
 	cachestate "interact/cacheState"
 	"interact/core"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -13,6 +14,38 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+func addCreate(tracer *RW_AccessListsTracer, from, to common.Address) {
+	tracer.list.AddReadSet(from, BALANCE)
+	tracer.list.AddWriteSet(from, BALANCE)
+	tracer.list.AddReadSet(from, NONCE)
+	tracer.list.AddWriteSet(from, NONCE)
+
+	tracer.list.AddWriteSet(to, BALANCE)
+	tracer.list.AddWriteSet(to, CODEHASH)
+	tracer.list.AddWriteSet(to, CODE)
+	tracer.list.AddWriteSet(to, NONCE)
+	tracer.list.AddWriteSet(to, ALIVE)
+	// Read to check if the contract to is already occupied
+	tracer.list.AddReadSet(to, NONCE)
+	tracer.list.AddReadSet(to, CODEHASH)
+}
+
+func addCall(tracer *RW_AccessListsTracer, from, to common.Address, value *big.Int) {
+	tracer.list.AddReadSet(from, BALANCE)
+	tracer.list.AddWriteSet(from, BALANCE)
+	tracer.list.AddReadSet(from, NONCE)
+	tracer.list.AddWriteSet(from, NONCE)
+
+	tracer.list.AddReadSet(to, CODE)
+	tracer.list.AddReadSet(to, CODEHASH)
+
+	// if value == 0, we could determine thta to-balance won't be touched
+	if value.Cmp(common.Big0) != 0 {
+		tracer.list.AddReadSet(to, BALANCE)
+		tracer.list.AddWriteSet(to, BALANCE)
+	}
+}
 
 var ErrFalsePredict error = errors.New("False Predict List")
 
@@ -34,57 +67,37 @@ func ExecBasedOnRWSets(statedb vm.StateDB, tx *types.Transaction, header *types.
 	tracer := NewRWAccessListTracer(nil, precompiles)
 	// 新建合约交易
 	if isCreate {
-		tracer.list.AddReadSet(from, BALANCE)
-		tracer.list.AddWriteSet(from, BALANCE)
-		tracer.list.AddReadSet(from, NONCE)
-		tracer.list.AddWriteSet(from, NONCE)
-
-		tracer.list.AddWriteSet(to, BALANCE)
-		tracer.list.AddWriteSet(to, CODEHASH)
-		tracer.list.AddWriteSet(to, CODE)
-		tracer.list.AddWriteSet(to, NONCE)
-		tracer.list.AddWriteSet(to, ALIVE)
-		// Read to check if the contract to is already occupied
-		tracer.list.AddReadSet(to, NONCE)
-		tracer.list.AddReadSet(to, CODEHASH)
+		addCreate(tracer, from, to)
 	} else {
-		tracer.list.AddReadSet(from, BALANCE)
-		tracer.list.AddWriteSet(from, BALANCE)
-		tracer.list.AddReadSet(from, NONCE)
-		tracer.list.AddWriteSet(from, NONCE)
-
-		tracer.list.AddReadSet(to, CODE)
-		tracer.list.AddReadSet(to, CODEHASH)
-
-		// if value == 0, we could determine thta to-balance won't be touched
-		value := tx.Value()
-		if value.Cmp(common.Big0) != 0 {
-			tracer.list.AddReadSet(to, BALANCE)
-			tracer.list.AddWriteSet(to, BALANCE)
-		}
-
+		addCall(tracer, from, to, tx.Value())
 	}
 
 	msg, err := core.TransactionToMessage(tx, types.LatestSigner(params.MainnetChainConfig), header.BaseFee)
 
 	if err != nil {
-		return nil, err // TODO: handle error
+		// This error means the transaction is invalid and should be discarded
+		return nil, err
 	}
 	msg.SkipAccountChecks = true
-	coinbase := common.BytesToAddress([]byte("coinbase"))
+	coinbase := header.Coinbase
 	config := vm.Config{Tracer: tracer}
 	txCtx := core.NewEVMTxContext(msg)
 	blkCtx := core.NewEVMBlockContext(header, chainCtx, &coinbase)
+
+	snapshot := statedb.Snapshot()
 	vm := vm.NewEVM(blkCtx, txCtx, statedb, params.MainnetChainConfig, config)
 	_, err = core.ApplyMessage(vm, msg, new(core.GasPool).AddGas(msg.GasLimit))
 	if err != nil {
-		return nil, err // TODO: handle error
+		// This error means the Execution phase failed and the transaction has been reverted
+		return nil, err
 	}
 
 	switch statedb.(type) {
 	case *cachestate.CacheState:
 		if statedb.(*cachestate.CacheState).StateJudge == false {
 			statedb.(*cachestate.CacheState).StateJudge = true
+			// This error means the prediction is false, and the transaction should be reverted
+			statedb.RevertToSnapshot(snapshot)
 			return nil, ErrFalsePredict
 		}
 	default:

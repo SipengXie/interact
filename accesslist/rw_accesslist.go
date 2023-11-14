@@ -18,6 +18,8 @@ type State map[common.Hash]struct{}
 
 type ALTuple map[common.Address]State
 
+type RWSetList []*RWSet
+
 func (tuple ALTuple) Add(addr common.Address, hash common.Hash) {
 	if _, ok := tuple[addr]; !ok {
 		tuple[addr] = make(State)
@@ -26,6 +28,9 @@ func (tuple ALTuple) Add(addr common.Address, hash common.Hash) {
 }
 
 func (tuple ALTuple) Contains(addr common.Address, hash common.Hash) bool {
+	if _, ok := tuple[addr]; !ok {
+		return false
+	}
 	_, ok := tuple[addr][hash]
 	return ok
 }
@@ -98,7 +103,7 @@ func (RWSets RWSet) Equal(other RWSet) bool {
 	return true
 }
 
-func decodeHash(hash common.Hash) string {
+func DecodeHash(hash common.Hash) string {
 	switch hash {
 	case CODE:
 		return "code"
@@ -138,13 +143,13 @@ func (RWSets RWSet) ToJsonStruct() RWSetJson {
 
 	for addr, state := range RWSets.ReadSet {
 		for hash := range state {
-			readAL[addr] = append(readAL[addr], decodeHash(hash))
+			readAL[addr] = append(readAL[addr], DecodeHash(hash))
 		}
 	}
 
 	for addr, state := range RWSets.WriteSet {
 		for hash := range state {
-			writeAL[addr] = append(writeAL[addr], decodeHash(hash))
+			writeAL[addr] = append(writeAL[addr], DecodeHash(hash))
 		}
 	}
 
