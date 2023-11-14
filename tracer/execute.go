@@ -87,12 +87,20 @@ func ExecuteWithGopool(statedb *state.StateDB, predictAl []*accesslist.RWSet, tx
 	// 等待所有任务执行完毕
 	pool.Wait()
 
-	elapsed := time.Since(start)
-	fmt.Println("Parallel Execution Time:", elapsed)
 	// 将全部的cachestate合并到原有的statedb
 	for i := 0; i < len(cacheStateDb); i++ {
-		cacheStateDb[i].MerageState(statedb)
+		cacheStateDb[i].MergeState(statedb)
 	}
+	// for j := 0; j < len(txGroups); j++ {
+	// 	taskNum := j
+	// 	pool.AddTask(func() (interface{}, error) {
+	// 		cacheStateDb[taskNum].MerageState(statedb)
+	// 		return nil, nil
+	// 	})
+	// }
+	// pool.Wait()
+	elapsed := time.Since(start)
+	fmt.Println("Parallel Execution and commit Time:", elapsed)
 
 }
 

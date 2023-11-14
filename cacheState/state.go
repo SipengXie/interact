@@ -415,7 +415,7 @@ func (s *CacheState) prefetchSetter(addr common.Address, hash common.Hash, state
 	}
 }
 
-func (s *CacheState) MerageState(statedb *state.StateDB) {
+func (s *CacheState) MergeState(statedb *state.StateDB) {
 	// 将状态合并到原有stateDB(直接set)
 	for addr, aoj := range s.Accounts {
 		// 将Data依次进行Set
