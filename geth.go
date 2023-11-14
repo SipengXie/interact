@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"interact/accesslist"
+	cachestate "interact/cacheState"
 	conflictgraph "interact/conflictGraph"
 	"interact/core"
 	"interact/mis"
@@ -270,27 +271,45 @@ func ExeTest(chainDB ethdb.Database, sdbBackend statedb.Database, blockNum uint6
 	}
 
 	// construct the conflict graph
-	undiConfGraph := conflictgraph.NewUndirectedGraph()
-	for i, tx := range txs {
-		undiConfGraph.AddVertex(tx.Hash(), uint(i))
-	}
-	for i := 0; i < txs.Len(); i++ {
-		for j := i + 1; j < txs.Len(); j++ {
-			if predictRWSets[i] == nil || predictRWSets[j] == nil {
-				continue
-			}
-			if predictRWSets[i].HasConflict(*predictRWSets[j]) {
-				undiConfGraph.AddEdge(uint(i), uint(j))
-			}
-		}
-	}
-	groups := undiConfGraph.GetConnectedComponents()
+	// undiConfGraph := conflictgraph.NewUndirectedGraph()
+	// for i, tx := range txs {
+	// 	undiConfGraph.AddVertex(tx.Hash(), uint(i))
+	// }
+	// for i := 0; i < txs.Len(); i++ {
+	// 	for j := i + 1; j < txs.Len(); j++ {
+	// 		if predictRWSets[i] == nil || predictRWSets[j] == nil {
+	// 			continue
+	// 		}
+	// 		if predictRWSets[i].HasConflict(*predictRWSets[j]) {
+	// 			undiConfGraph.AddEdge(uint(i), uint(j))
+	// 		}
+	// 	}
+	// }
+	// groups := undiConfGraph.GetConnectedComponents()
 
 	// test the serial execution
-	SerialExecuteTest(state, txs, header, fakeChainCtx)
+	// SerialExecuteTest(state, txs, header, fakeChainCtx)
+
+	// test the serial execution with CacheState
+	cacheState := cachestate.NewStateDB()
+	var txTest *types.Transaction
+	var predictRWSet *accesslist.RWSet
+	for i, tx := range txs {
+		if tx.Hash().Hex() == "0x850191a8f10a632a21b196d35ba97b7b4675ac97ab67d000a44900d292fd2f77" {
+			txTest = tx
+			predictRWSet = predictRWSets[i]
+		}
+	}
+	cacheState.Prefetch(state, []*accesslist.RWSet{predictRWSet})
+	list, err := tracer.ExecBasedOnRWSets(state, txTest, header, fakeChainCtx)
+	if err != nil {
+		fmt.Println(err)
+	} else {
+		fmt.Println(list.Equal(*predictRWSet))
+	}
 
 	// test the parallel execution
-	ParallelExecuteTest(state, predictRWSets, groups, txs, header, fakeChainCtx)
+	// ParallelExecuteTest(state, predictRWSets, groups, txs, header, fakeChainCtx)
 
 	return nil
 }

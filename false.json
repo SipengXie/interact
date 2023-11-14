@@ -1,0 +1,25 @@
+{
+   "readAL":{
+      "0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0":[
+         "0x0000000000000000000000000000000000000000000000000000000000000004",
+         "0x95e1cb8450b3aad95bbce601f627254334d951ac976cf6dd9a853d5d805f06f8",
+         "0xa2f6bf20cf3c3858f7c87d986e0577ea9fa271feffe49061bed539f7eadc9220",
+         "code",
+         "codeHash"
+      ],
+      "0x87cbc48075d7aa1760ac71c41e8bc289b6a31f56":[
+         "balance",
+         "nonce"
+      ]
+   },
+   "writeAL":{
+      "0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0":[
+         "0xa2f6bf20cf3c3858f7c87d986e0577ea9fa271feffe49061bed539f7eadc9220",
+         "0x95e1cb8450b3aad95bbce601f627254334d951ac976cf6dd9a853d5d805f06f8"
+      ],
+      "0x87cbc48075d7aa1760ac71c41e8bc289b6a31f56":[
+         "nonce",
+         "balance"
+      ]
+   }
+}

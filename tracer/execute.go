@@ -7,9 +7,7 @@ import (
 	conflictgraph "interact/conflictGraph"
 	"interact/core"
 	"sort"
-	"time"
 
-	"github.com/devchat-ai/gopool"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -24,11 +22,13 @@ func Execute(sdb vm.StateDB, txs []*types.Transaction, header *types.Header, cha
 		snapshot := sdb.Snapshot()
 		_, err := ExecBasedOnRWSets(sdb, tx, header, chainCtx)
 		if err != nil {
+			if err == ErrFalsePredict {
+				fmt.Println("False Predict List:", tx.Hash())
+			}
 			// 若出错则进行回滚
 			sdb.RevertToSnapshot(snapshot)
 			return err
 		}
-		// TODO：后续传predict进行对比
 	}
 	return nil
 }
@@ -38,10 +38,7 @@ func ExecuteWithGopool(statedb *state.StateDB, predictAl []*accesslist.RWSet, tx
 	// 	从groups中组装出交易来执行
 	txsInGroup := make([][]*types.Transaction, len(txGroups))
 	als := make([][]*accesslist.RWSet, len(txGroups))
-	fmt.Println("len of txGroups:", len(txGroups))
 	for i := 0; i < len(txGroups); i++ {
-		// fmt.Println("len of txGroups[i]:", len(txGroups[i]))
-		// 对每个组的交易进行排序，按照txId从小到大
 		sort.Slice(txGroups[i], func(j, k int) bool {
 			return txGroups[i][j].TxId < txGroups[i][k].TxId
 		})
@@ -53,50 +50,51 @@ func ExecuteWithGopool(statedb *state.StateDB, predictAl []*accesslist.RWSet, tx
 	}
 
 	// 初始化一个gopool线程池,队列长度可设为分组组数
-	pool := gopool.NewGoPool(16, gopool.WithTaskQueueSize(len(txGroups)), gopool.WithMinWorkers(8))
-	defer pool.Release()
+	// pool := gopool.NewGoPool(16, gopool.WithTaskQueueSize(len(txGroups)), gopool.WithMinWorkers(8))
+	// defer pool.Release()
 
-	// 初始化一个缓存DB群
+	// // 初始化一个缓存DB群
 	cacheStateDb := make([]*cachestate.CacheState, len(txGroups))
-	// ！忘了会不会自动调用new了
 	for i := 0; i < len(txGroups); i++ {
-		// TODO : 并发预取
 		cacheStateDb[i] = cachestate.NewStateDB()
+		cacheStateDb[i].Prefetch(statedb, als[i])
+	}
+	// single group run
+	fmt.Println(len(als[0]))
+	ParallelExeFunc(txsInGroup[0], cacheStateDb[0], header, chainCtx)
 
-	}
-	for j := 0; j < len(txGroups); j++ {
-		taskNum := j
-		pool.AddTask(func() (interface{}, error) {
-			cacheStateDb[taskNum].Prefetch(statedb, als[taskNum])
-			return nil, nil
-		})
-	}
-	pool.Wait()
-	// fmt.Println("len of cacheStateDb:", len(cacheStateDb))
-	// fmt.Println("len of als:", len(als))
+	// // for j := 0; j < len(txGroups); j++ {
+	// // 	taskNum := j
+	// // 	pool.AddTask(func() (interface{}, error) {
+	// // 		cacheStateDb[taskNum].Prefetch(statedb, als[taskNum])
+	// // 		return nil, nil
+	// // 	})
+	// // }
+	// // pool.Wait()
+	// // fmt.Println("len of cacheStateDb:", len(cacheStateDb))
+	// // fmt.Println("len of als:", len(als))
 
-	start := time.Now()
-	// 为每组交易创建一个任务
-	fmt.Println("bingo")
-	for j := 0; j < len(txGroups); j++ {
-		taskNum := j
-		pool.AddTask(func() (interface{}, error) {
-			return ParallelExeFunc(statedb, txsInGroup[taskNum], cacheStateDb[taskNum], header, chainCtx)
-		})
-	}
-	// 等待所有任务执行完毕
-	pool.Wait()
+	// start := time.Now()
+	// // 为每组交易创建一个任务
+	// for j := 0; j < len(txGroups); j++ {
+	// 	taskNum := j
+	// 	pool.AddTask(func() (interface{}, error) {
+	// 		return ParallelExeFunc(txsInGroup[taskNum], cacheStateDb[taskNum], header, chainCtx)
+	// 	})
+	// }
+	// // 等待所有任务执行完毕
+	// pool.Wait()
 
-	elapsed := time.Since(start)
-	fmt.Println("Parallel Execution Time:", elapsed)
-	// 将全部的cachestate合并到原有的statedb
-	for i := 0; i < len(cacheStateDb); i++ {
-		cacheStateDb[i].MerageState(statedb)
-	}
+	// elapsed := time.Since(start)
+	// fmt.Println("Parallel Execution Time:", elapsed)
+	// // 将全部的cachestate合并到原有的statedb
+	// for i := 0; i < len(cacheStateDb); i++ {
+	// 	cacheStateDb[i].MerageState(statedb)
+	// }
 
 }
 
-func ParallelExeFunc(statedb *state.StateDB, txs []*types.Transaction, cacheStateDb *cachestate.CacheState, header *types.Header, chainCtx core.ChainContext) (interface{}, error) {
+func ParallelExeFunc(txs []*types.Transaction, cacheStateDb *cachestate.CacheState, header *types.Header, chainCtx core.ChainContext) (interface{}, error) {
 	// 使用cacheState执行交易
 	err := Execute(cacheStateDb, txs, header, chainCtx)
 	if err != nil {
