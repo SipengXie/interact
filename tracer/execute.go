@@ -5,6 +5,7 @@ import (
 	"interact/core"
 
 	"github.com/devchat-ai/gopool"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
@@ -18,7 +19,7 @@ func excuteTx(statedb vm.StateDB, tx *types.Transaction, header *types.Header, c
 		// This error means the transaction is invalid and should be discarded
 		return err
 	}
-	msg.SkipAccountChecks = true
+	// msg.SkipAccountChecks = true
 	txCtx := core.NewEVMTxContext(msg)
 	evm.TxContext = txCtx
 
@@ -55,8 +56,8 @@ func ExecuteTxs(sdb vm.StateDB, txs []*types.Transaction, header *types.Header, 
 	return errs
 }
 
-// Execute with GoPool
-func ExecuteWithGopool(txsGroups []types.Transactions, CacheStates cachestate.CacheStateList, header *types.Header, chainCtx core.ChainContext) {
+// Execute with GoPool with cacheState
+func ExecuteWithGopoolCacheState(txsGroups []types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext) {
 	// Initialize a GoPool
 	pool := gopool.NewGoPool(16, gopool.WithTaskQueueSize(len(txsGroups)), gopool.WithMinWorkers(8), gopool.WithResultCallback(func(result interface{}) {
 		// fmt.Println("Task result:", result)
@@ -68,6 +69,25 @@ func ExecuteWithGopool(txsGroups []types.Transactions, CacheStates cachestate.Ca
 		taskNum := j
 		pool.AddTask(func() (interface{}, error) {
 			errs := ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
+			return errs, nil
+		})
+	}
+	pool.Wait()
+}
+
+// Execute with GoPool with StatetDB
+func ExecuteWithGopoolStateDB(txsGroups []types.Transactions, statedb []*state.StateDB, header *types.Header, chainCtx core.ChainContext) {
+	// Initialize a GoPool
+	pool := gopool.NewGoPool(16, gopool.WithTaskQueueSize(len(txsGroups)), gopool.WithMinWorkers(8), gopool.WithResultCallback(func(result interface{}) {
+		// fmt.Println("Task result:", result)
+	}))
+	defer pool.Release()
+	// Add tasks to the pool
+	// !!! Gopool will costs 50ms to do the scheduling !!!
+	for j := 0; j < len(txsGroups); j++ {
+		taskNum := j
+		pool.AddTask(func() (interface{}, error) {
+			errs := ExecuteTxs(statedb[taskNum], txsGroups[taskNum], header, chainCtx)
 			return errs, nil
 		})
 	}

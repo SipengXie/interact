@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/core/state"
+	// "github.com/ethereum/go-ethereum/core/state"
 	statedb "github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -270,7 +270,7 @@ func GenerateCacheStates(db vm.StateDB, RWSetsGroups []accesslist.RWSetList) cac
 	return cacheStates
 }
 
-func MergeToState(cacheStates cachestate.CacheStateList, db *state.StateDB) {
+func MergeToState(cacheStates cachestate.CacheStateList, db *statedb.StateDB) {
 	for i := 0; i < len(cacheStates); i++ {
 		cacheStates[i].MergeState(db)
 	}
@@ -316,6 +316,7 @@ func ExeTest(chainDB ethdb.Database, sdbBackend statedb.Database, blockNum uint6
 		// construct the conflict graph
 		vertexGroups := GenerateVertexGroups(txs, predictRWSets)
 		txsGroups, RWSetsGroups := GenerateTxAndRWSetGroups(vertexGroups, txs, predictRWSets)
+		// txsGroups, _ := GenerateTxAndRWSetGroups(vertexGroups, txs, predictRWSets)
 		elapsed := time.Since(start)
 		fmt.Println("Generate TxGroups Costs:", elapsed)
 
@@ -325,9 +326,19 @@ func ExeTest(chainDB ethdb.Database, sdbBackend statedb.Database, blockNum uint6
 		elapsed = time.Since(start)
 		fmt.Println("Generate CacheStates Costs:", elapsed)
 
+		// Try to Copy original stateDB
+		start = time.Now()
+		stateList := make([]*statedb.StateDB, len(txsGroups))
+		for i := 0; i < len(txsGroups); i++ {
+			stateList[i] = db.Copy()
+		}
+		elapsed = time.Since(start)
+		fmt.Println("Generate StateList Costs:", elapsed)
+
 		// test the parallel execution
 		start = time.Now()
-		tracer.ExecuteWithGopool(txsGroups, cacheStates, header, fakeChainCtx)
+		tracer.ExecuteWithGopoolCacheState(txsGroups, cacheStates, header, fakeChainCtx)
+		// tracer.ExecuteWithGopoolStateDB(txsGroups, stateList, header, fakeChainCtx)
 		elapsed = time.Since(start)
 		fmt.Println("Parallel Execution Time With Pool Generating:", elapsed)
 
