@@ -8,10 +8,12 @@ import (
 	"interact/mis"
 	"interact/tracer"
 	"os"
+	"time"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	statedb "github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/node"
@@ -219,6 +221,80 @@ func SolveMISInTurn(undiConfGraph *conflictgraph.UndirectedGraph) {
 	}
 }
 
+// serial execution test
+func SerialExecuteTest(statedb vm.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) {
+	// set the satrt time
+	start := time.Now()
+
+	// execute the transactions
+	tracer.Execute(statedb, txs, header, chainCtx)
+
+	// cal the execution time
+	elapsed := time.Since(start)
+	fmt.Println("Serial Execution Time:", elapsed)
+}
+
+// parallel execution test
+func ParallelExecuteTest(statedb *statedb.StateDB, predictAl []*accesslist.RWSet, txGroups [][]*conflictgraph.Vertex, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) {
+	// set the satrt time
+	start := time.Now()
+
+	// execute the transactions
+	tracer.ExecuteWithGopool(statedb, predictAl, txGroups, txs, header, chainCtx)
+
+	// cal the execution time
+	elapsed := time.Since(start)
+	fmt.Println("Parallel Execution Time:", elapsed)
+
+}
+
+// two manners to execute the transactions test
+func ExeTest(chainDB ethdb.Database, sdbBackend statedb.Database, blockNum uint64) error {
+	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, blockNum-1)
+	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, blockNum-1)
+	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
+	if err != nil {
+		return err
+	}
+	headHash := rawdb.ReadCanonicalHash(chainDB, blockNum)
+	header := rawdb.ReadHeader(chainDB, headHash, blockNum)
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
+
+	Block := rawdb.ReadBlock(chainDB, headHash, blockNum)
+	txs := Block.Transactions()
+
+	// predict the rw access list
+	predictRWSets := make([]*accesslist.RWSet, txs.Len())
+	for i, tx := range txs {
+		predictRWSets[i] = PredictRWSets(tx, chainDB, sdbBackend, blockNum)
+	}
+
+	// construct the conflict graph
+	undiConfGraph := conflictgraph.NewUndirectedGraph()
+	for i, tx := range txs {
+		undiConfGraph.AddVertex(tx.Hash(), uint(i))
+	}
+	for i := 0; i < txs.Len(); i++ {
+		for j := i + 1; j < txs.Len(); j++ {
+			if predictRWSets[i] == nil || predictRWSets[j] == nil {
+				continue
+			}
+			if predictRWSets[i].HasConflict(*predictRWSets[j]) {
+				undiConfGraph.AddEdge(uint(i), uint(j))
+			}
+		}
+	}
+	groups := undiConfGraph.GetConnectedComponents()
+
+	// test the serial execution
+	SerialExecuteTest(state, txs, header, fakeChainCtx)
+
+	// test the parallel execution
+	ParallelExecuteTest(state, predictRWSets, groups, txs, header, fakeChainCtx)
+
+	return nil
+}
+
 func main() {
 	Node, chainDB, sdbBackend := GetEthDatabaseAndStateDatabase()
 	defer Node.Close()
@@ -226,5 +302,7 @@ func main() {
 	head := rawdb.ReadHeadBlockHash(chainDB)
 	num := *rawdb.ReadHeaderNumber(chainDB, head)
 
-	IterateBlock(chainDB, sdbBackend, num)
+	// IterateBlock(chainDB, sdbBackend, num)
+
+	ExeTest(chainDB, sdbBackend, num)
 }

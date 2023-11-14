@@ -19,6 +19,9 @@ type State map[common.Hash]struct{}
 type ALTuple map[common.Address]State
 
 func (tuple ALTuple) Add(addr common.Address, hash common.Hash) {
+	if _, ok := tuple[addr]; !ok {
+		tuple[addr] = make(State)
+	}
 	tuple[addr][hash] = struct{}{}
 }
 

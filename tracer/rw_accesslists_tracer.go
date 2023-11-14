@@ -12,11 +12,11 @@ import (
 )
 
 var (
-	CODE     = sha256.Sum256([]byte("code"))
-	CODEHASH = sha256.Sum256([]byte("codeHash"))
-	BALANCE  = sha256.Sum256([]byte("balance"))
-	NONCE    = sha256.Sum256([]byte("nonce"))
-	ALIVE    = sha256.Sum256([]byte("alive"))
+	CODE     = common.Hash(sha256.Sum256([]byte("code")))
+	CODEHASH = common.Hash(sha256.Sum256([]byte("codeHash")))
+	BALANCE  = common.Hash(sha256.Sum256([]byte("balance")))
+	NONCE    = common.Hash(sha256.Sum256([]byte("nonce")))
+	ALIVE    = common.Hash(sha256.Sum256([]byte("alive")))
 )
 
 // Tracer mainly records the accesslist of each transaction during vm execution (interpreter.run)

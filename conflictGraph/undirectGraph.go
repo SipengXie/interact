@@ -1,6 +1,8 @@
 package conflictgraph
 
-import "github.com/ethereum/go-ethereum/common"
+import (
+	"github.com/ethereum/go-ethereum/common"
+)
 
 // Vertex 表示图中的顶点
 type Vertex struct {
