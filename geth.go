@@ -189,6 +189,9 @@ func SolveMISInTurn(undiConfGraph *conflictgraph.UndirectedGraph) {
 func GenerateVertexGroups(txs types.Transactions, predictRWSets []*accesslist.RWSet) [][]*conflictgraph.Vertex {
 	undiConfGraph := conflictgraph.NewUndirectedGraph()
 	for i, tx := range txs {
+		if predictRWSets[i] == nil {
+			continue
+		}
 		undiConfGraph.AddVertex(tx.Hash(), uint(i))
 	}
 	for i := 0; i < txs.Len(); i++ {
@@ -227,6 +230,9 @@ func GenerateCacheStates(db vm.StateDB, RWSetsGroups []accesslist.RWSetList) cac
 	// cannot concurrent prefetch due to the statedb is not thread safe
 	cacheStates := make([]*cachestate.CacheState, len(RWSetsGroups))
 	for i := 0; i < len(RWSetsGroups); i++ {
+		if RWSetsGroups[i] == nil {
+			continue
+		}
 		cacheStates[i] = cachestate.NewStateDB()
 		cacheStates[i].Prefetch(db, RWSetsGroups[i])
 	}
@@ -234,9 +240,10 @@ func GenerateCacheStates(db vm.StateDB, RWSetsGroups []accesslist.RWSetList) cac
 }
 
 // Try to prefectch concurrently
+// ! Cannot Continously run, for the hot data copy is...
 func GenerateCacheStatesWithPool(pool gopool.GoPool, db *statedb.StateDB, RWSetsGroups []accesslist.RWSetList) cachestate.CacheStateList {
 	// cannot concurrent prefetch due to the statedb is not thread safe
-	st := time.Now()
+	// st := time.Now()
 	dbList := make([]*statedb.StateDB, len(RWSetsGroups))
 	cacheStates := make([]*cachestate.CacheState, len(RWSetsGroups))
 	for i := 0; i < len(RWSetsGroups); i++ {
@@ -245,15 +252,19 @@ func GenerateCacheStatesWithPool(pool gopool.GoPool, db *statedb.StateDB, RWSets
 	}
 
 	for i := 0; i < len(RWSetsGroups); i++ {
+		if RWSetsGroups[i] == nil {
+			continue
+		}
 		taskNum := i
 		pool.AddTask(func() (interface{}, error) {
+			st := time.Now()
 			cacheStates[taskNum].Prefetch(dbList[taskNum], RWSetsGroups[taskNum])
-			return nil, nil
+			return time.Since(st), nil
 		})
 	}
 	pool.Wait()
 
-	fmt.Println("Prefetching cost:", time.Since(st))
+	// fmt.Println("Concurrent Prefetching cost:", time.Since(st))
 	return cacheStates
 }
 
@@ -334,7 +345,7 @@ func ExeTestFromStartToEndWithCacheState(chainDB ethdb.Database, sdbBackend stat
 		}))
 		defer pool.Release()
 
-		// get statedb from block[startNum-1].Root
+		// // get statedb from block[startNum-1].Root
 		state, err := GetState(chainDB, sdbBackend, startNum-1)
 		if err != nil {
 			return err
@@ -352,18 +363,34 @@ func ExeTestFromStartToEndWithCacheState(chainDB ethdb.Database, sdbBackend stat
 		}
 		elapsed := time.Since(start)
 		fmt.Println("Generate TxGroups Costs:", elapsed)
+		fmt.Println()
 
 		// !!! Our Prefetch is less efficient than StateDB.Prefetch !!!
-		start = time.Now()
+		executeCost := time.Duration(0)
 		for i := 0; i < len(txs); i++ {
-			cacheStates := GenerateCacheStates(state, RWSetGroupsList[i])
+			// // this step simulate that the state is committed
+			// state, _ := GetState(chainDB, sdbBackend, startNum-1+uint64(i))
+			// start = time.Now()
+			// cacheStates := GenerateCacheStatesWithPool(pool, state, RWSetGroupsList[i])
+			// elapsed = time.Since(start)
+			// executeCost += elapsed
+
+			// fmt.Println("Longest Task for Prefecthing Costs:", timeCost)
+			// timeCost = time.Duration(0)
+
+			cacheStates := GenerateCacheStates(state, RWSetGroupsList[i]) // This step is to warm up the cache
+
+			start = time.Now()
 			tracer.ExecuteWithGopoolCacheState(pool, txGroupsList[i], cacheStates, headers[i], fakeChainCtx)
-			fmt.Println("Longest Task Costs:", timeCost)
+			elapsed = time.Since(start)
+			executeCost += elapsed
+
+			fmt.Println("Longest Task Costs for Execution Costs:", timeCost)
 			timeCost = time.Duration(0)
 			MergeToState(cacheStates, state)
+			// fmt.Println()
 		}
-		elapsed = time.Since(start)
-		fmt.Println("Parallel Execution Time With cacheState:", elapsed)
+		fmt.Println("Parallel Execution Time With cacheState:", executeCost)
 	}
 
 	return nil
@@ -496,6 +523,6 @@ func main() {
 	num := *rawdb.ReadHeaderNumber(chainDB, head)
 	// IterateBlock(chainDB, sdbBackend, num)
 	// CompareTracerAndFulldb(chainDB, sdbBackend, num)
-	ExeTestFromStartToEndWithCacheState(chainDB, sdbBackend, num, num)
+	ExeTestFromStartToEndWithCacheState(chainDB, sdbBackend, num-19, num)
 	// ExeTestFromStartToEndWithStateDB(chainDB, sdbBackend, num, num)
 }

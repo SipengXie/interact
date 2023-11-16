@@ -1,7 +1,6 @@
 package tracer
 
 import (
-	"fmt"
 	cachestate "interact/cacheState"
 	"interact/core"
 	"time"
@@ -63,7 +62,7 @@ func ExecuteTxs(sdb vm.StateDB, txs []*types.Transaction, header *types.Header, 
 func ExecuteWithGopoolCacheState(pool gopool.GoPool, txsGroups []types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext) {
 	// Add tasks to the pool
 	// !!! Gopool will costs 50ms to do the scheduling !!!
-	st := time.Now()
+	// st := time.Now()
 	for j := 0; j < len(txsGroups); j++ {
 		taskNum := j
 		pool.AddTask(func() (interface{}, error) {
@@ -73,7 +72,7 @@ func ExecuteWithGopoolCacheState(pool gopool.GoPool, txsGroups []types.Transacti
 		})
 	}
 	pool.Wait()
-	fmt.Println("Execute Costs:", time.Since(st))
+	// fmt.Println("Execute Costs:", time.Since(st))
 }
 
 // Execute with GoPool with StatetDB
