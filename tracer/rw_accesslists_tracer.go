@@ -30,7 +30,7 @@ func NewRWAccessListTracer(RWSets *accesslist.RWSet, precompiles []common.Addres
 	for _, addr := range precompiles {
 		excl[addr] = struct{}{}
 	}
-	rwList := accesslist.NewRWAccessLists()
+	rwList := accesslist.NewRWSet()
 	if RWSets != nil {
 		for key := range RWSets.ReadSet {
 			addr := common.BytesToAddress(key[:20])

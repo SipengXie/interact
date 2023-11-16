@@ -3,8 +3,8 @@ package tracer
 import (
 	"errors"
 	"interact/accesslist"
-	cachestate "interact/cacheState"
 	"interact/core"
+	"interact/fullstate"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -14,6 +14,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+var ErrFalsePredict error = errors.New("False Predict List")
 
 func addCreate(tracer *RW_AccessListsTracer, from, to common.Address) {
 	tracer.list.AddReadSet(from, BALANCE)
@@ -47,9 +49,7 @@ func addCall(tracer *RW_AccessListsTracer, from, to common.Address, value *big.I
 	}
 }
 
-var ErrFalsePredict error = errors.New("False Predict List")
-
-func ExecBasedOnRWSets(statedb vm.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RWSet, error) {
+func PredictWithTracer(statedb vm.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RWSet, error) {
 	from, _ := types.Sender(types.LatestSigner(params.MainnetChainConfig), tx)
 	var to common.Address = common.Address{}
 	if tx.To() != nil {
@@ -65,48 +65,43 @@ func ExecBasedOnRWSets(statedb vm.StateDB, tx *types.Transaction, header *types.
 	isPostMerge := header.Difficulty.Cmp(common.Big0) == 0
 	precompiles := vm.ActivePrecompiles(params.MainnetChainConfig.Rules(header.Number, isPostMerge, header.Time)) // 非常不严谨的chainconfig
 	tracer := NewRWAccessListTracer(nil, precompiles)
-	// 新建合约交易
+
 	if isCreate {
 		addCreate(tracer, from, to)
 	} else {
 		addCall(tracer, from, to, tx.Value())
 	}
 
-	msg, err := core.TransactionToMessage(tx, types.LatestSigner(params.MainnetChainConfig), header.BaseFee)
-
+	evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, statedb, params.MainnetChainConfig, vm.Config{Tracer: tracer})
+	err := executeTx(statedb, tx, header, chainCtx, evm)
 	if err != nil {
-		// This error means the transaction is invalid and should be discarded
 		return nil, err
 	}
-	msg.SkipAccountChecks = true
-	coinbase := header.Coinbase
-	config := vm.Config{Tracer: tracer}
-	txCtx := core.NewEVMTxContext(msg)
-	blkCtx := core.NewEVMBlockContext(header, chainCtx, &coinbase)
-
-	snapshot := statedb.Snapshot()
-	vm := vm.NewEVM(blkCtx, txCtx, statedb, params.MainnetChainConfig, config)
-	_, err = core.ApplyMessage(vm, msg, new(core.GasPool).AddGas(msg.GasLimit))
-	if err != nil {
-		// This error means the Execution phase failed and the transaction has been reverted
-		return nil, err
-	}
-
-	switch statedb.(type) {
-	case *cachestate.CacheState:
-		if statedb.(*cachestate.CacheState).StateJudge == false {
-			statedb.(*cachestate.CacheState).StateJudge = true
-			// This error means the prediction is false, and the transaction should be reverted
-			statedb.RevertToSnapshot(snapshot)
-			return nil, ErrFalsePredict
-		}
-	default:
-		break
-	}
-
 	return tracer.list, nil
 }
 
+// -------------------------------------------------------
+func ExecToGenerateRWSet(fulldb *fullstate.FullState, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RWSet, error) {
+	rwSet := accesslist.NewRWSet()
+	fulldb.SetRWSet(rwSet)
+	evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, fulldb, params.MainnetChainConfig, vm.Config{})
+	err := executeTx(fulldb, tx, header, chainCtx, evm)
+	if err != nil {
+		return nil, err
+	}
+	return rwSet, nil
+}
+
+func CreateRWSetsWithTransactions(db *fullstate.FullState, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RWSet, []error) {
+	ret := make([]*accesslist.RWSet, len(txs))
+	err := make([]error, len(txs))
+	for i, tx := range txs {
+		ret[i], err[i] = ExecToGenerateRWSet(db, tx, header, chainCtx)
+	}
+	return ret, err
+}
+
+// ------------------------------------------------------
 // CreateOldAL 获取交易实际运行时的OldAccessList
 func ExecBasedOnOldAL(statedb vm.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.AccessList, error) {
 	from, _ := types.Sender(types.LatestSigner(params.MainnetChainConfig), tx)
@@ -175,15 +170,6 @@ func ChangeAccessList(tracer accessList) *accesslist.AccessList {
 		}
 	}
 	return al
-}
-
-func CreateRWSetsWithTransactions(db vm.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RWSet, []error) {
-	ret := make([]*accesslist.RWSet, len(txs))
-	err := make([]error, len(txs))
-	for i, tx := range txs {
-		ret[i], err[i] = ExecBasedOnRWSets(db, tx, header, chainCtx)
-	}
-	return ret, err
 }
 
 func CreateOldALWithTransactions(db *state.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.AccessList, []error) {

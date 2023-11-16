@@ -12,14 +12,15 @@ import (
 )
 
 // This function execute without generating tracer.list
-func excuteTx(statedb vm.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext, evm *vm.EVM) error {
+func executeTx(statedb vm.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext, evm *vm.EVM) error {
 	msg, err := core.TransactionToMessage(tx, types.LatestSigner(params.MainnetChainConfig), header.BaseFee)
 
 	if err != nil {
 		// This error means the transaction is invalid and should be discarded
 		return err
 	}
-	// msg.SkipAccountChecks = true
+	// Skip the nonce check!
+	msg.SkipAccountChecks = true
 	txCtx := core.NewEVMTxContext(msg)
 	evm.TxContext = txCtx
 
@@ -51,7 +52,7 @@ func ExecuteTxs(sdb vm.StateDB, txs []*types.Transaction, header *types.Header, 
 	errs := make([]error, len(txs))
 	for i, tx := range txs {
 		// ExecBasedOnRWSets includes the snapshot logic
-		errs[i] = excuteTx(sdb, tx, header, chainCtx, evm)
+		errs[i] = executeTx(sdb, tx, header, chainCtx, evm)
 	}
 	return errs
 }
@@ -60,7 +61,6 @@ func ExecuteTxs(sdb vm.StateDB, txs []*types.Transaction, header *types.Header, 
 func ExecuteWithGopoolCacheState(txsGroups []types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext) {
 	// Initialize a GoPool
 	pool := gopool.NewGoPool(16, gopool.WithTaskQueueSize(len(txsGroups)), gopool.WithMinWorkers(8), gopool.WithResultCallback(func(result interface{}) {
-		// fmt.Println("Task result:", result)
 	}))
 	defer pool.Release()
 	// Add tasks to the pool

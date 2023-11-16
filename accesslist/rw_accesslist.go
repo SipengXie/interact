@@ -2,6 +2,7 @@ package accesslist
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -40,7 +41,7 @@ type RWSet struct {
 	WriteSet ALTuple
 }
 
-func NewRWAccessLists() *RWSet {
+func NewRWSet() *RWSet {
 	return &RWSet{
 		ReadSet:  make(ALTuple),
 		WriteSet: make(ALTuple),
@@ -160,6 +161,11 @@ func (RWSets RWSet) ToJsonStruct() RWSetJson {
 }
 
 type RWSetJson struct {
-	ReadSet  map[common.Address][]string `json:"readAL"`
-	WriteSet map[common.Address][]string `json:"writeAL"`
+	ReadSet  map[common.Address][]string `json:"readSet"`
+	WriteSet map[common.Address][]string `json:"writeSet"`
+}
+
+func (rwj RWSetJson) ToString() string {
+	b, _ := json.Marshal(rwj)
+	return string(b)
 }

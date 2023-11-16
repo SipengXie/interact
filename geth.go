@@ -6,6 +6,7 @@ import (
 	cachestate "interact/cacheState"
 	conflictgraph "interact/conflictGraph"
 	"interact/core"
+	"interact/fullstate"
 	"interact/mis"
 	"interact/tracer"
 	"os"
@@ -57,15 +58,40 @@ func PredictRWSets(tx *types.Transaction, chainDB ethdb.Database, sdbBackend sta
 	if err != nil {
 		panic(err)
 	}
+	fulldb := fullstate.NewFullState(state)
 
 	headHash := rawdb.ReadCanonicalHash(chainDB, num)
 	header := rawdb.ReadHeader(chainDB, headHash, num)
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
-	list, err := tracer.ExecBasedOnRWSets(state, tx, header, fakeChainCtx)
+	list, err := tracer.ExecToGenerateRWSet(fulldb, tx, header, fakeChainCtx)
 	if err != nil {
 		fmt.Println("NIL tx hash:", tx.Hash())
 	}
 	return list
+}
+
+func TrueRWSets(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) ([]*accesslist.RWSet, error) {
+	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
+	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
+
+	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
+	if err != nil {
+		return nil, err
+	}
+	fulldb := fullstate.NewFullState(state)
+
+	headHash := rawdb.ReadCanonicalHash(chainDB, num)
+	header := rawdb.ReadHeader(chainDB, headHash, num)
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
+
+	lists, errs := tracer.CreateRWSetsWithTransactions(fulldb, txs, header, fakeChainCtx)
+	for i, err := range errs {
+		if err != nil {
+			fmt.Println("In TRUERWSetsS, tx hash:", txs[i].Hash())
+			panic(err)
+		}
+	}
+	return lists, nil
 }
 
 // PredictOldAL 获取预测的OldAccessList，即在不更新StateDB的条件下执行交易获取OldAccessList
@@ -112,29 +138,6 @@ func OldTrueALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend sta
 	return lists, nil
 }
 
-func TrueRWSetss(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) ([]*accesslist.RWSet, error) {
-	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
-	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
-
-	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	headHash := rawdb.ReadCanonicalHash(chainDB, num)
-	header := rawdb.ReadHeader(chainDB, headHash, num)
-	fakeChainCtx := core.NewFakeChainContext(chainDB)
-
-	lists, errs := tracer.CreateRWSetsWithTransactions(state, txs, header, fakeChainCtx)
-	for i, err := range errs {
-		if err != nil {
-			fmt.Println("In TRUERWSetsS, tx hash:", txs[i].Hash())
-			panic(err)
-		}
-	}
-	return lists, nil
-}
-
 func IterateBlock(chainDB ethdb.Database, sdbBackend statedb.Database, startHeight uint64) {
 	num := startHeight
 	file, _ := os.Create("test.txt")
@@ -145,15 +148,15 @@ func IterateBlock(chainDB ethdb.Database, sdbBackend statedb.Database, startHeig
 		Block := rawdb.ReadBlock(chainDB, headHash, num)
 		txs := Block.Transactions()
 
-		trueLists, err := TrueRWSetss(txs, chainDB, sdbBackend, num)
-		if err != nil {
-			break
-		}
-
 		predictLists := make([]*accesslist.RWSet, txs.Len())
 		for i, tx := range txs {
 			predictLists[i] = PredictRWSets(tx, chainDB, sdbBackend, num)
 		}
+		trueLists, err := TrueRWSets(txs, chainDB, sdbBackend, num)
+		if err != nil {
+			break
+		}
+
 		nilCounter := 0
 		conflictCounter := 0
 		for i, list := range trueLists {
@@ -165,6 +168,7 @@ func IterateBlock(chainDB ethdb.Database, sdbBackend statedb.Database, startHeig
 				conflictCounter++
 			}
 		}
+		fmt.Fprintln(file, "Transaction Number", txs.Len())
 		fmt.Fprintln(file, "Nil Prediction Number:", nilCounter)
 		fmt.Fprintln(file, "False Prediction Number:", conflictCounter)
 
@@ -189,7 +193,6 @@ func IterateBlock(chainDB ethdb.Database, sdbBackend statedb.Database, startHeig
 		for i := 0; i < len(groups); i++ {
 			fmt.Fprintf(file, "Number of Group[%d]:%d\n", i, len(groups[i]))
 		}
-
 		num--
 	}
 }
@@ -239,6 +242,7 @@ func GenerateVertexGroups(txs types.Transactions, predictRWSets []*accesslist.RW
 			}
 		}
 	}
+
 	groups := undiConfGraph.GetConnectedComponents()
 	return groups
 }
@@ -276,33 +280,60 @@ func MergeToState(cacheStates cachestate.CacheStateList, db *statedb.StateDB) {
 	}
 }
 
+// Get StateDB from block[num].Root
+func GetState(chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) (*statedb.StateDB, error) {
+	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num)
+	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num)
+	return statedb.New(baseHeader.Root, sdbBackend, nil)
+}
+
+func GetBlockAndHeader(chainDB ethdb.Database, num uint64) (*types.Block, *types.Header) {
+	headHash := rawdb.ReadCanonicalHash(chainDB, num)
+	header := rawdb.ReadHeader(chainDB, headHash, num)
+	block := rawdb.ReadBlock(chainDB, headHash, num)
+	return block, header
+}
+
 // two manners to execute the transactions test
-func ExeTest(chainDB ethdb.Database, sdbBackend statedb.Database, blockNum uint64) error {
-	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, blockNum-1)
-	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, blockNum-1)
-	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
-	if err != nil {
-		return err
-	}
-	headHash := rawdb.ReadCanonicalHash(chainDB, blockNum)
-	header := rawdb.ReadHeader(chainDB, headHash, blockNum)
+func ExeTestFromStartToEndWithCacheState(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
-	Block := rawdb.ReadBlock(chainDB, headHash, blockNum)
-	txs := Block.Transactions()
+	// Try to expand transaction lists
+	txs := make([]types.Transactions, endNum-startNum+1)
+	predictRWSets := make([][]*accesslist.RWSet, endNum-startNum+1)
+	headers := make([]*types.Header, endNum-startNum+1)
+	TotalTxsNum := 0
 
-	// predict the rw access list
-	predictRWSets := make([]*accesslist.RWSet, txs.Len())
-	for i, tx := range txs {
-		predictRWSets[i] = PredictRWSets(tx, chainDB, sdbBackend, blockNum)
+	// generate predictlist, txslist and headerlist
+	for height := startNum; height <= endNum; height++ {
+		// for each block, we predict its txs
+		block, header := GetBlockAndHeader(chainDB, height)
+		blockTxs := block.Transactions()
+		blockPredicts := make([]*accesslist.RWSet, blockTxs.Len())
+		for j, tx := range blockTxs {
+			blockPredicts[j] = PredictRWSets(tx, chainDB, sdbBackend, height)
+		}
+		txs[height-startNum] = blockTxs
+		predictRWSets[height-startNum] = blockPredicts
+		headers[height-startNum] = header
+		TotalTxsNum += blockTxs.Len()
 	}
 
+	fmt.Println("Transaction Number:", TotalTxsNum)
+	// predict the rw access list
+
 	{
-		db := state.Copy()
+		// get statedb from block[startNum-1].Root
+		state, err := GetState(chainDB, sdbBackend, startNum-1)
+		if err != nil {
+			return err
+		}
 		// set the satrt time
 		start := time.Now()
 		// test the serial execution
-		tracer.ExecuteTxs(db, txs, header, fakeChainCtx)
+		for i := 0; i < len(txs); i++ {
+			tracer.ExecuteTxs(state, txs[i], headers[i], fakeChainCtx)
+		}
 		// cal the execution time
 		elapsed := time.Since(start)
 		fmt.Println("Serial Execution Time:", elapsed)
@@ -310,81 +341,55 @@ func ExeTest(chainDB ethdb.Database, sdbBackend statedb.Database, blockNum uint6
 
 	{
 
-		db := state.Copy()
-		// set the satrt time
+		// get statedb from block[startNum-1].Root
+		state, err := GetState(chainDB, sdbBackend, startNum-1)
+		if err != nil {
+			return err
+		}
+
 		start := time.Now()
-		// construct the conflict graph
-		vertexGroups := GenerateVertexGroups(txs, predictRWSets)
-		txsGroups, RWSetsGroups := GenerateTxAndRWSetGroups(vertexGroups, txs, predictRWSets)
-		// txsGroups, _ := GenerateTxAndRWSetGroups(vertexGroups, txs, predictRWSets)
+		vertexGroupsList := make([][][]*conflictgraph.Vertex, len(txs))
+		txGroupsList := make([][]types.Transactions, len(txs))
+		RWSetGroupsList := make([][]accesslist.RWSetList, len(txs))
+		for i := 0; i < len(txs); i++ {
+			vertexGroupsList[i] = GenerateVertexGroups(txs[i], predictRWSets[i])
+			txGroupsList[i], RWSetGroupsList[i] = GenerateTxAndRWSetGroups(vertexGroupsList[i], txs[i], predictRWSets[i])
+		}
 		elapsed := time.Since(start)
 		fmt.Println("Generate TxGroups Costs:", elapsed)
 
 		// !!! Our Prefetch is less efficient than StateDB.Prefetch !!!
 		start = time.Now()
-		cacheStates := GenerateCacheStates(db, RWSetsGroups)
-		elapsed = time.Since(start)
-		fmt.Println("Generate CacheStates Costs:", elapsed)
-
-		// Try to Copy original stateDB
-		start = time.Now()
-		stateList := make([]*statedb.StateDB, len(txsGroups))
-		for i := 0; i < len(txsGroups); i++ {
-			stateList[i] = db.Copy()
+		for i := 0; i < len(txs); i++ {
+			cacheStates := GenerateCacheStates(state, RWSetGroupsList[i])
+			tracer.ExecuteWithGopoolCacheState(txGroupsList[i], cacheStates, headers[i], fakeChainCtx)
+			MergeToState(cacheStates, state)
 		}
 		elapsed = time.Since(start)
-		fmt.Println("Generate StateList Costs:", elapsed)
-
-		// test the parallel execution
-		start = time.Now()
-		tracer.ExecuteWithGopoolCacheState(txsGroups, cacheStates, header, fakeChainCtx)
-		// tracer.ExecuteWithGopoolStateDB(txsGroups, stateList, header, fakeChainCtx)
-		elapsed = time.Since(start)
-		fmt.Println("Parallel Execution Time With Pool Generating:", elapsed)
-
-		// cannot concurrent merge due to the statedb is not thread safe
-		start = time.Now()
-		MergeToState(cacheStates, db)
-		elapsed = time.Since(start)
-		fmt.Println("Merge CacheStates to StateDB Costs:", elapsed)
-
-		// calc the execution time
-
+		fmt.Println("Parallel Execution Time With cacheState:", elapsed)
 	}
 
-	// test the serial execution with CacheState
-	// cacheState := cachestate.NewStateDB()
-	// cacheState.Prefetch(state, predictRWSets)
-	// _, errs := tracer.CreateRWSetsWithTransactions(cacheState, txs, header, fakeChainCtx)
-	// counter := 0
-	// for i, err := range errs {
-	// 	if err == tracer.ErrFalsePredict {
-	// 		counter++
-	// 		fmt.Println("False Prediction tx hash:", txs[i].Hash())
-	// 	} else if err != nil {
-	// 		fmt.Println("Error During Execution without immediatly addBalance to coinbase:", txs[i].Hash())
-	// 	}
-	// }
-	// fmt.Println("False Prediction Number:", counter)
-
-	// cachestate := cachestate.NewStateDB()
-	// var txTest *types.Transaction
-	// var predictSet *accesslist.RWSet
-	// for i, tx := range txs {
-	// 	if tx.Hash().Hex() == "0xa00fef3b0ffcd386183312c6be6bb5640abf5d6ec381ce0f5ba990c666a2b9f5" {
-	// 		txTest = tx
-	// 		predictSet = predictRWSets[i]
-	// 	}
-	// }
-	// b, _ := json.Marshal(predictSet.ToJsonStruct())
-	// fmt.Println(string(b))
-	// cachestate.Prefetch(state, []*accesslist.RWSet{predictSet})
-	// fmt.Println("In state, the nonce:", state.GetNonce(*txTest.To()))
-	// fmt.Println("In cache, the nonce:", cachestate.GetNonce(*txTest.To()))
-	// _, err = tracer.ExecBasedOnRWSets(cachestate, txTest, header, fakeChainCtx)
-	// fmt.Println(err)
-
 	return nil
+}
+
+func CompareTracerAndFulldb(chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) {
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
+	baseState, _ := GetState(chainDB, sdbBackend, num-1)
+	block, header := GetBlockAndHeader(chainDB, num)
+	tx := block.Transactions()[1]
+	fmt.Println("Tx Hash:", tx.Hash().Hex())
+	tracerPredict, _ := tracer.PredictWithTracer(baseState.Copy(), tx, header, fakeChainCtx)
+
+	fulldb := fullstate.NewFullState(baseState.Copy())
+	fullStatePredict, _ := tracer.ExecToGenerateRWSet(fulldb, tx, header, fakeChainCtx)
+
+	jsonfile, _ := os.Create("tracer.json")
+	fmt.Fprintln(jsonfile, tracerPredict.ToJsonStruct().ToString())
+	jsonfile.Close()
+
+	jsonfile, _ = os.Create("fullstate.json")
+	fmt.Fprintln(jsonfile, fullStatePredict.ToJsonStruct().ToString())
+	jsonfile.Close()
 }
 
 func main() {
@@ -393,8 +398,7 @@ func main() {
 
 	head := rawdb.ReadHeadBlockHash(chainDB)
 	num := *rawdb.ReadHeaderNumber(chainDB, head)
-
 	// IterateBlock(chainDB, sdbBackend, num)
-
-	ExeTest(chainDB, sdbBackend, num)
+	// CompareTracerAndFulldb(chainDB, sdbBackend, num)
+	ExeTestFromStartToEndWithCacheState(chainDB, sdbBackend, num, num)
 }
