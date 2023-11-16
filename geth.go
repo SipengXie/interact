@@ -9,15 +9,18 @@ import (
 	"interact/fullstate"
 	"interact/mis"
 	"interact/tracer"
+	"math/rand"
 	"os"
 	"sort"
 	"time"
 
+	"github.com/devchat-ai/gopool"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/vm"
+
 	// "github.com/ethereum/go-ethereum/core/state"
 	statedb "github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/node"
@@ -88,50 +91,6 @@ func TrueRWSets(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend sta
 	for i, err := range errs {
 		if err != nil {
 			fmt.Println("In TRUERWSetsS, tx hash:", txs[i].Hash())
-			panic(err)
-		}
-	}
-	return lists, nil
-}
-
-// PredictOldAL 获取预测的OldAccessList，即在不更新StateDB的条件下执行交易获取OldAccessList
-func PredictOldAL(tx *types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) *accesslist.AccessList {
-
-	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
-	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
-
-	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
-	if err != nil {
-		panic(err)
-	}
-
-	headHash := rawdb.ReadCanonicalHash(chainDB, num)
-	header := rawdb.ReadHeader(chainDB, headHash, num)
-	fakeChainCtx := core.NewFakeChainContext(chainDB)
-	list, err := tracer.ExecBasedOnOldAL(state, tx, header, fakeChainCtx)
-	if err != nil {
-		fmt.Println("NIL tx hash:", tx.Hash())
-	}
-	return list
-}
-
-func OldTrueALs(txs []*types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) ([]*accesslist.AccessList, error) {
-	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
-	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
-
-	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	headHash := rawdb.ReadCanonicalHash(chainDB, num)
-	header := rawdb.ReadHeader(chainDB, headHash, num)
-	fakeChainCtx := core.NewFakeChainContext(chainDB)
-
-	lists, errs := tracer.CreateOldALWithTransactions(state, txs, header, fakeChainCtx)
-	for i, err := range errs {
-		if err != nil {
-			fmt.Println("In TRUEOLDACL, tx hash:", txs[i].Hash())
 			panic(err)
 		}
 	}
@@ -274,6 +233,30 @@ func GenerateCacheStates(db vm.StateDB, RWSetsGroups []accesslist.RWSetList) cac
 	return cacheStates
 }
 
+// Try to prefectch concurrently
+func GenerateCacheStatesWithPool(pool gopool.GoPool, db *statedb.StateDB, RWSetsGroups []accesslist.RWSetList) cachestate.CacheStateList {
+	// cannot concurrent prefetch due to the statedb is not thread safe
+	st := time.Now()
+	dbList := make([]*statedb.StateDB, len(RWSetsGroups))
+	cacheStates := make([]*cachestate.CacheState, len(RWSetsGroups))
+	for i := 0; i < len(RWSetsGroups); i++ {
+		cacheStates[i] = cachestate.NewStateDB()
+		dbList[i] = db.Copy()
+	}
+
+	for i := 0; i < len(RWSetsGroups); i++ {
+		taskNum := i
+		pool.AddTask(func() (interface{}, error) {
+			cacheStates[taskNum].Prefetch(dbList[taskNum], RWSetsGroups[taskNum])
+			return nil, nil
+		})
+	}
+	pool.Wait()
+
+	fmt.Println("Prefetching cost:", time.Since(st))
+	return cacheStates
+}
+
 func MergeToState(cacheStates cachestate.CacheStateList, db *statedb.StateDB) {
 	for i := 0; i < len(cacheStates); i++ {
 		cacheStates[i].MergeState(db)
@@ -328,6 +311,9 @@ func ExeTestFromStartToEndWithCacheState(chainDB ethdb.Database, sdbBackend stat
 		if err != nil {
 			return err
 		}
+		state.StartPrefetcher("miner")
+		defer state.StopPrefetcher()
+
 		// set the satrt time
 		start := time.Now()
 		// test the serial execution
@@ -340,6 +326,108 @@ func ExeTestFromStartToEndWithCacheState(chainDB ethdb.Database, sdbBackend stat
 	}
 
 	{
+		timeCost := time.Duration(0)
+		pool := gopool.NewGoPool(16, gopool.WithResultCallback(func(result interface{}) {
+			if result.(time.Duration) > timeCost {
+				timeCost = result.(time.Duration)
+			}
+		}))
+		defer pool.Release()
+
+		// get statedb from block[startNum-1].Root
+		state, err := GetState(chainDB, sdbBackend, startNum-1)
+		if err != nil {
+			return err
+		}
+		// state.StartPrefetcher("miner")
+		// defer state.StopPrefetcher()
+
+		start := time.Now()
+		vertexGroupsList := make([][][]*conflictgraph.Vertex, len(txs))
+		txGroupsList := make([][]types.Transactions, len(txs))
+		RWSetGroupsList := make([][]accesslist.RWSetList, len(txs))
+		for i := 0; i < len(txs); i++ {
+			vertexGroupsList[i] = GenerateVertexGroups(txs[i], predictRWSets[i])
+			txGroupsList[i], RWSetGroupsList[i] = GenerateTxAndRWSetGroups(vertexGroupsList[i], txs[i], predictRWSets[i])
+		}
+		elapsed := time.Since(start)
+		fmt.Println("Generate TxGroups Costs:", elapsed)
+
+		// !!! Our Prefetch is less efficient than StateDB.Prefetch !!!
+		start = time.Now()
+		for i := 0; i < len(txs); i++ {
+			cacheStates := GenerateCacheStates(state, RWSetGroupsList[i])
+			tracer.ExecuteWithGopoolCacheState(pool, txGroupsList[i], cacheStates, headers[i], fakeChainCtx)
+			fmt.Println("Longest Task Costs:", timeCost)
+			timeCost = time.Duration(0)
+			MergeToState(cacheStates, state)
+		}
+		elapsed = time.Since(start)
+		fmt.Println("Parallel Execution Time With cacheState:", elapsed)
+	}
+
+	return nil
+}
+
+// TODO: Try to achive with StateDB, we need statedb merge
+func ExeTestFromStartToEndWithStateDB(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+	if startNum != endNum {
+		panic("startNum != endNum")
+	}
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
+
+	// Try to expand transaction lists
+	txs := make([]types.Transactions, endNum-startNum+1)
+	predictRWSets := make([][]*accesslist.RWSet, endNum-startNum+1)
+	headers := make([]*types.Header, endNum-startNum+1)
+	TotalTxsNum := 0
+
+	// generate predictlist, txslist and headerlist
+	for height := startNum; height <= endNum; height++ {
+		// for each block, we predict its txs
+		block, header := GetBlockAndHeader(chainDB, height)
+		blockTxs := block.Transactions()
+		blockPredicts := make([]*accesslist.RWSet, blockTxs.Len())
+		for j, tx := range blockTxs {
+			blockPredicts[j] = PredictRWSets(tx, chainDB, sdbBackend, height)
+		}
+		txs[height-startNum] = blockTxs
+		predictRWSets[height-startNum] = blockPredicts
+		headers[height-startNum] = header
+		TotalTxsNum += blockTxs.Len()
+	}
+
+	fmt.Println("Transaction Number:", TotalTxsNum)
+	// predict the rw access list
+
+	{
+		// get statedb from block[startNum-1].Root
+		state, err := GetState(chainDB, sdbBackend, startNum-1)
+		if err != nil {
+			return err
+		}
+		state.StartPrefetcher("miner")
+		defer state.StopPrefetcher()
+
+		// set the satrt time
+		start := time.Now()
+		// test the serial execution
+		for i := 0; i < len(txs); i++ {
+			tracer.ExecuteTxs(state, txs[i], headers[i], fakeChainCtx)
+		}
+		// cal the execution time
+		elapsed := time.Since(start)
+		fmt.Println("Serial Execution Time:", elapsed)
+	}
+
+	{
+		timeCost := time.Duration(0)
+		pool := gopool.NewGoPool(16, gopool.WithResultCallback(func(result interface{}) {
+			if result.(time.Duration) > timeCost {
+				timeCost = result.(time.Duration)
+			}
+		}))
+		defer pool.Release()
 
 		// get statedb from block[startNum-1].Root
 		state, err := GetState(chainDB, sdbBackend, startNum-1)
@@ -361,9 +449,13 @@ func ExeTestFromStartToEndWithCacheState(chainDB ethdb.Database, sdbBackend stat
 		// !!! Our Prefetch is less efficient than StateDB.Prefetch !!!
 		start = time.Now()
 		for i := 0; i < len(txs); i++ {
-			cacheStates := GenerateCacheStates(state, RWSetGroupsList[i])
-			tracer.ExecuteWithGopoolCacheState(txGroupsList[i], cacheStates, headers[i], fakeChainCtx)
-			MergeToState(cacheStates, state)
+			stateList := make([]*statedb.StateDB, len(RWSetGroupsList[i]))
+			for j := 0; j < len(RWSetGroupsList[i]); j++ {
+				stateList[j] = state.Copy()
+			}
+			tracer.ExecuteWithGopoolStateDB(pool, txGroupsList[i], stateList, headers[i], fakeChainCtx)
+			fmt.Println("Longest Task Costs:", timeCost)
+			// No Merge state yet
 		}
 		elapsed = time.Since(start)
 		fmt.Println("Parallel Execution Time With cacheState:", elapsed)
@@ -376,7 +468,11 @@ func CompareTracerAndFulldb(chainDB ethdb.Database, sdbBackend statedb.Database,
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 	baseState, _ := GetState(chainDB, sdbBackend, num-1)
 	block, header := GetBlockAndHeader(chainDB, num)
-	tx := block.Transactions()[1]
+
+	rand.Seed(time.Now().UnixNano())
+	randomId := rand.Intn(block.Transactions().Len())
+	tx := block.Transactions()[randomId]
+	fmt.Println("Tx id:", randomId)
 	fmt.Println("Tx Hash:", tx.Hash().Hex())
 	tracerPredict, _ := tracer.PredictWithTracer(baseState.Copy(), tx, header, fakeChainCtx)
 
@@ -401,4 +497,5 @@ func main() {
 	// IterateBlock(chainDB, sdbBackend, num)
 	// CompareTracerAndFulldb(chainDB, sdbBackend, num)
 	ExeTestFromStartToEndWithCacheState(chainDB, sdbBackend, num, num)
+	// ExeTestFromStartToEndWithStateDB(chainDB, sdbBackend, num, num)
 }

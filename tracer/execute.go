@@ -1,8 +1,10 @@
 package tracer
 
 import (
+	"fmt"
 	cachestate "interact/cacheState"
 	"interact/core"
+	"time"
 
 	"github.com/devchat-ai/gopool"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -58,37 +60,33 @@ func ExecuteTxs(sdb vm.StateDB, txs []*types.Transaction, header *types.Header, 
 }
 
 // Execute with GoPool with cacheState
-func ExecuteWithGopoolCacheState(txsGroups []types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext) {
-	// Initialize a GoPool
-	pool := gopool.NewGoPool(16, gopool.WithTaskQueueSize(len(txsGroups)), gopool.WithMinWorkers(8), gopool.WithResultCallback(func(result interface{}) {
-	}))
-	defer pool.Release()
+func ExecuteWithGopoolCacheState(pool gopool.GoPool, txsGroups []types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext) {
 	// Add tasks to the pool
 	// !!! Gopool will costs 50ms to do the scheduling !!!
+	st := time.Now()
 	for j := 0; j < len(txsGroups); j++ {
 		taskNum := j
 		pool.AddTask(func() (interface{}, error) {
-			errs := ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
-			return errs, nil
+			st := time.Now()
+			ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
+			return time.Since(st), nil
 		})
 	}
 	pool.Wait()
+	fmt.Println("Execute Costs:", time.Since(st))
 }
 
 // Execute with GoPool with StatetDB
-func ExecuteWithGopoolStateDB(txsGroups []types.Transactions, statedb []*state.StateDB, header *types.Header, chainCtx core.ChainContext) {
+func ExecuteWithGopoolStateDB(pool gopool.GoPool, txsGroups []types.Transactions, statedb []*state.StateDB, header *types.Header, chainCtx core.ChainContext) {
 	// Initialize a GoPool
-	pool := gopool.NewGoPool(16, gopool.WithTaskQueueSize(len(txsGroups)), gopool.WithMinWorkers(8), gopool.WithResultCallback(func(result interface{}) {
-		// fmt.Println("Task result:", result)
-	}))
-	defer pool.Release()
 	// Add tasks to the pool
 	// !!! Gopool will costs 50ms to do the scheduling !!!
 	for j := 0; j < len(txsGroups); j++ {
 		taskNum := j
 		pool.AddTask(func() (interface{}, error) {
-			errs := ExecuteTxs(statedb[taskNum], txsGroups[taskNum], header, chainCtx)
-			return errs, nil
+			st := time.Now()
+			ExecuteTxs(statedb[taskNum], txsGroups[taskNum], header, chainCtx)
+			return time.Since(st), nil
 		})
 	}
 	pool.Wait()
