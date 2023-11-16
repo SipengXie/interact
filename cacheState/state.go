@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -43,10 +44,13 @@ type CacheState struct {
 	logSize        uint
 	StateJudge     bool
 	prefetching    bool
+	prefectched    accesslist.ALTuple
 	Journal        *journal `json:"journal,omitempty"`
 	ValidRevisions []revision
 	NextRevisionId int
 }
+
+type CacheStateList []*CacheState
 
 func NewStateDB() *CacheState {
 	return &CacheState{
@@ -55,11 +59,12 @@ func NewStateDB() *CacheState {
 		Logs:        make(map[common.Hash][]*types.Log),
 		StateJudge:  true,
 		prefetching: false,
+		prefectched: make(accesslist.ALTuple),
 	}
 }
 
-func (accSt *CacheState) getAccountObject(addr common.Address) *accountObject {
-	obj, ok := accSt.Accounts[addr]
+func (s *CacheState) getAccountObject(addr common.Address) *accountObject {
+	obj, ok := s.Accounts[addr]
 	if ok {
 		return obj
 	} else {
@@ -67,207 +72,262 @@ func (accSt *CacheState) getAccountObject(addr common.Address) *accountObject {
 	}
 }
 
-func (accSt *CacheState) setAccountObject(obj *accountObject) {
-	accSt.Accounts[obj.Address] = obj
+func (s *CacheState) setAccountObject(obj *accountObject) {
+	s.Accounts[obj.Address] = obj
 }
 
-func (accSt *CacheState) getOrsetAccountObject(addr common.Address) *accountObject {
-	get := accSt.getAccountObject(addr)
-	if get != nil {
-		return get
-	} else {
-		// 若取不出accountObject且此时不为prefetch时则将stateJudge置为false
-		if !accSt.prefetching {
-			accSt.StateJudge = false
-			return nil
-		}
-	} // TODO： 若时account返回nil会产生报错
-	set := newAccountObject(addr, accountData{})
-	accSt.setAccountObject(set)
-	return set
-}
-
-// CreateAccount 创建账户接口(该方法不管是在prefetch时还是在正常执行时都可以被正常调用）
-func (accSt *CacheState) CreateAccount(addr common.Address) {
-	if accSt.getAccountObject(addr) != nil {
-		// 我们忽略addr冲突的情况
-		return
-	}
-	accSt.Journal.append(createObjectChange{&addr})
-	obj := newAccountObject(addr, accountData{})
-	accSt.setAccountObject(obj)
-}
-
-// SubBalance 减去某个账户的余额
-func (accSt *CacheState) SubBalance(addr common.Address, amount *big.Int) {
-	stateObject := accSt.getOrsetAccountObject(addr)
-	if stateObject != nil {
-		accSt.Journal.append(balanceChange{&addr, stateObject.Data.Balance})
-		stateObject.SubBalance(amount)
-	}
-}
-
-// AddBalance 增加某个账户的余额
-func (accSt *CacheState) AddBalance(addr common.Address, amount *big.Int) {
-	stateObject := accSt.getOrsetAccountObject(addr)
-	if stateObject != nil {
-		accSt.Journal.append(balanceChange{&addr, stateObject.Data.Balance})
-		stateObject.AddBalance(amount)
-	}
-}
-
-func (accSt *CacheState) SetBalance(addr common.Address, amount *big.Int) {
-	stateObject := accSt.getOrsetAccountObject(addr)
-	if stateObject != nil {
-		accSt.Journal.append(balanceChange{&addr, stateObject.Data.Balance})
-		stateObject.SetBalance(amount)
-	}
-}
+// ------------------------------- Getter --------------------------------
 
 // GetBalance 获取某个账户的余额
-func (accSt *CacheState) GetBalance(addr common.Address) *big.Int {
-	stateObject := accSt.getOrsetAccountObject(addr)
+func (s *CacheState) GetBalance(addr common.Address) *big.Int {
+	stateObject := s.getAccountObject(addr)
 	if stateObject != nil {
 		return stateObject.GetBalance()
 	}
+	s.StateJudge = false
 	return new(big.Int).SetInt64(0)
 }
 
 // GetNonce 获取nonce
-func (accSt *CacheState) GetNonce(addr common.Address) uint64 {
-	stateObject := accSt.getAccountObject(addr)
+func (s *CacheState) GetNonce(addr common.Address) uint64 {
+	stateObject := s.getAccountObject(addr)
 	if stateObject != nil {
 		return stateObject.GetNonce()
 	}
+	s.StateJudge = false
 	return 0
-}
-
-// SetNonce 设置nonce
-func (accSt *CacheState) SetNonce(addr common.Address, nonce uint64) {
-	stateObject := accSt.getOrsetAccountObject(addr)
-	if stateObject != nil {
-		accSt.Journal.append(nonceChange{&addr, stateObject.Data.Nonce})
-		stateObject.SetNonce(nonce)
-	}
 }
 
 // GetCodeHash 获取代码的hash值
-func (accSt *CacheState) GetCodeHash(addr common.Address) common.Hash {
-	stateObject := accSt.getAccountObject(addr)
-	if stateObject == nil {
-		return common.Hash{}
-	}
-	return stateObject.CodeHash()
-}
-
-// GetCode 获取智能合约的代码
-func (accSt *CacheState) GetCode(addr common.Address) []byte {
-	stateObject := accSt.getAccountObject(addr)
+func (s *CacheState) GetCodeHash(addr common.Address) common.Hash {
+	stateObject := s.getAccountObject(addr)
 	if stateObject != nil {
-		return stateObject.Code()
+		return stateObject.CodeHash()
 	}
-	return nil
-}
-
-// SetCode 设置智能合约的code
-func (accSt *CacheState) SetCode(addr common.Address, code []byte) {
-	stateObject := accSt.getOrsetAccountObject(addr)
-	if stateObject != nil {
-		accSt.Journal.append(codeChange{&addr, stateObject.ByteCode, stateObject.Data.CodeHash.Bytes()})
-		stateObject.SetCode(crypto.Keccak256Hash(code), code)
-	}
-}
-
-// GetCodeSize 获取code的大小
-func (accSt *CacheState) GetCodeSize(addr common.Address) int {
-	stateObject := accSt.getAccountObject(addr)
-	if stateObject == nil {
-		return 0
-	}
-	if stateObject.ByteCode != nil {
-		return len(stateObject.ByteCode)
-	}
-	return 0
-}
-
-// AddRefund
-func (accSt *CacheState) AddRefund(amount uint64) {
-}
-
-// SubRefund
-func (accSt *CacheState) SubRefund(amount uint64) {
-}
-
-// GetRefund ...
-func (accSt *CacheState) GetRefund() uint64 {
-	return 0
-}
-
-func (accSt *CacheState) GetCommittedState(addr common.Address, key common.Hash) common.Hash {
-	return accSt.GetState(addr, key)
-}
-
-// GetState 和SetState 是用于保存合约执行时 存储的变量是否发生变化 evm对变量存储的改变消耗的gas是有区别的
-func (accSt *CacheState) GetState(addr common.Address, key common.Hash) common.Hash {
-	stateObject := accSt.getOrsetAccountObject(addr)
-	if stateObject != nil {
-		val, ok := stateObject.GetStorageState(key)
-		// 若成功取出则无事发生
-		if ok {
-			return val
-		} else {
-			// 若失败，将stateJudge置为false
-			accSt.StateJudge = false
-		}
-		return common.Hash{}
-	}
+	s.StateJudge = false
 	return common.Hash{}
 }
 
-// SetState 设置变量的状态
-func (accSt *CacheState) SetState(addr common.Address, key common.Hash, value common.Hash) {
-	stateObject := accSt.getOrsetAccountObject(addr)
+// GetCode 获取智能合约的代码
+func (s *CacheState) GetCode(addr common.Address) []byte {
+	stateObject := s.getAccountObject(addr)
 	if stateObject != nil {
-		// fmt.Printf("SetState key: %x value: %s", key, new(big.Int).SetBytes(value[:]).String())
-		// 若是prefetching则正常执行
-		if accSt.prefetching {
-			// val, _ := stateObject.GetStorageState(key)
-			// accSt.Journal.append(storageChange{&addr, key, val})
-			stateObject.SetStorageState(key, value)
+		return stateObject.Code()
+	}
+	s.StateJudge = false
+	return nil
+}
+
+// GetCodeSize 获取code的大小
+func (s *CacheState) GetCodeSize(addr common.Address) int {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		if stateObject.ByteCode != nil {
+			return len(stateObject.ByteCode)
 		} else {
-			// 执行时若取不出slot则将stateJudge置为false
-			val, ok := stateObject.GetStorageState(key)
-			// 若成功取出则无事发生
-			if ok {
-				accSt.Journal.append(storageChange{&addr, key, val})
-				stateObject.SetStorageState(key, value)
-			} else {
-				// 若失败，将stateJudge置为false
-				accSt.StateJudge = false
-			}
+			return 0
 		}
 	}
+	s.StateJudge = false
+	return 0
+}
+
+// GetRefund ...
+func (s *CacheState) GetRefund() uint64 {
+	return 0
+}
+
+func (s *CacheState) GetCommittedState(addr common.Address, key common.Hash) common.Hash {
+	return s.GetState(addr, key)
+}
+
+// GetState 和SetState 是用于保存合约执行时 存储的变量是否发生变化 evm对变量存储的改变消耗的gas是有区别的
+func (s *CacheState) GetState(addr common.Address, key common.Hash) common.Hash {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		val, ok := stateObject.GetStorageState(key)
+		if ok {
+			return val
+		}
+		s.StateJudge = false
+		return common.Hash{}
+	}
+	s.StateJudge = false
+	return common.Hash{}
 }
 
 // GetTransientState gets transient storage for a given account.
-func (accSt *CacheState) GetTransientState(addr common.Address, key common.Hash) common.Hash {
-	return accSt.GetState(addr, key)
+func (s *CacheState) GetTransientState(addr common.Address, key common.Hash) common.Hash {
+	return s.GetState(addr, key)
+}
+
+// Exist 检查账户是否存在
+func (s *CacheState) Exist(addr common.Address) bool {
+	return s.getAccountObject(addr) != nil
+}
+
+// Empty 是否是空账户
+func (s *CacheState) Empty(addr common.Address) bool {
+	so := s.getAccountObject(addr)
+	return so == nil || so.Empty()
+}
+
+// ---------------------------------------- Setter -------------------------------------
+
+func (s *CacheState) CreateAccount(addr common.Address) {
+	if s.getAccountObject(addr) != nil {
+		return
+	}
+	if !s.prefetching {
+		s.Journal.append(createObjectChange{&addr})
+	}
+	obj := newAccountObject(addr, accountData{})
+	s.setAccountObject(obj)
+}
+
+func (s *CacheState) SubBalance(addr common.Address, amount *big.Int) {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		if !s.prefetching {
+			s.Journal.append(balanceChange{&addr, stateObject.Data.Balance})
+		}
+		stateObject.SubBalance(amount)
+		return
+	}
+	// fmt.Println("SubBalance:", addr)
+	s.StateJudge = false
+}
+
+// AddBalance 增加某个账户的余额
+func (s *CacheState) AddBalance(addr common.Address, amount *big.Int) {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		if !s.prefetching {
+			s.Journal.append(balanceChange{&addr, stateObject.Data.Balance})
+		}
+		stateObject.AddBalance(amount)
+		return
+	}
+	s.StateJudge = false
+}
+
+func (s *CacheState) SetBalance(addr common.Address, amount *big.Int) {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		s.Journal.append(balanceChange{&addr, stateObject.Data.Balance})
+		stateObject.SetBalance(amount)
+		return
+	}
+	s.StateJudge = false
+}
+
+func (s *CacheState) setBalancePrefetch(addr common.Address, amount *big.Int) {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		stateObject.SetBalance(amount)
+		return
+	}
+}
+
+// SetNonce 设置nonce
+func (s *CacheState) SetNonce(addr common.Address, nonce uint64) {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		s.Journal.append(nonceChange{&addr, stateObject.Data.Nonce})
+		stateObject.SetNonce(nonce)
+		return
+	}
+	s.StateJudge = false
+}
+
+func (s *CacheState) setNoncePrefetch(addr common.Address, nonce uint64) {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		stateObject.SetNonce(nonce)
+		return
+	}
+}
+
+// SetCode 设置智能合约的code
+func (s *CacheState) SetCode(addr common.Address, code []byte) {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		if !s.prefetching {
+			s.Journal.append(codeChange{&addr, stateObject.ByteCode, stateObject.Data.CodeHash.Bytes()})
+		}
+		stateObject.SetCode(crypto.Keccak256Hash(code), code)
+		return
+	}
+	s.StateJudge = false
+}
+
+func (s *CacheState) setCodePrefetch(addr common.Address, code []byte) {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		stateObject.ByteCode = code
+		return
+	}
+}
+
+// This function only used in prefectching phase
+func (s *CacheState) setCodeHashPrefetch(addr common.Address, codeHash common.Hash) {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		stateObject.Data.CodeHash = codeHash
+		return
+	}
+}
+
+// AddRefund
+func (s *CacheState) AddRefund(amount uint64) {
+}
+
+// SubRefund
+func (s *CacheState) SubRefund(amount uint64) {
+}
+
+// SetState 设置变量的状态
+func (s *CacheState) SetState(addr common.Address, key common.Hash, value common.Hash) {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		val, ok := stateObject.GetStorageState(key)
+		if ok {
+			// the value is present in the cache, so we need to record the change
+			s.Journal.append(storageChange{&addr, key, val})
+			stateObject.SetStorageState(key, value)
+		} else {
+			// we write something that was not prefectched before, so we need to invalidate the cache
+			// fmt.Println("SetState without slot:", addr, " ", key)
+			s.StateJudge = false
+		}
+		return
+	}
+	// fmt.Println("SetState without addr:", addr)
+	s.StateJudge = false
+}
+
+func (s *CacheState) setStatePrefetch(addr common.Address, key common.Hash, value common.Hash) {
+	stateObject := s.getAccountObject(addr)
+	if stateObject != nil {
+		stateObject.SetStorageState(key, value)
+		return
+	}
 }
 
 // SetTransientState sets transient storage for a given account. It
 // adds the change to the journal so that it can be rolled back
 // to its previous value if there is a revert.
-func (accSt *CacheState) SetTransientState(addr common.Address, key, value common.Hash) {
-	accSt.SetState(addr, key, value)
+func (s *CacheState) SetTransientState(addr common.Address, key, value common.Hash) {
+	s.SetState(addr, key, value)
 }
 
 // Suicide
-func (accSt *CacheState) SelfDestruct(addr common.Address) {
-	stateObject := accSt.getAccountObject(addr)
+func (s *CacheState) SelfDestruct(addr common.Address) {
+	stateObject := s.getAccountObject(addr)
 	if stateObject == nil {
 		return
 	}
-	accSt.Journal.append(selfDestructChange{
+	s.Journal.append(selfDestructChange{
 		account:     &addr,
 		prev:        stateObject.IsAlive,
 		prevbalance: stateObject.Data.Balance,
@@ -277,91 +337,80 @@ func (accSt *CacheState) SelfDestruct(addr common.Address) {
 }
 
 // HasSuicided ...
-func (accSt *CacheState) HasSelfDestructed(addr common.Address) bool {
-	stateObject := accSt.getAccountObject(addr)
+func (s *CacheState) HasSelfDestructed(addr common.Address) bool {
+	stateObject := s.getAccountObject(addr)
 	if stateObject == nil {
 		return false
 	}
 	return !stateObject.IsAlive
 }
 
-func (accSt *CacheState) Selfdestruct6780(addr common.Address) {
-	accSt.SelfDestruct(addr)
+func (s *CacheState) Selfdestruct6780(addr common.Address) {
+	s.SelfDestruct(addr)
 }
 
-func (accSt *CacheState) SetIsAlive(addr common.Address, isAlive bool) {
-	stateObject := accSt.getAccountObject(addr)
+func (s *CacheState) setIsAlivePrefetch(addr common.Address, isAlive bool) {
+	stateObject := s.getAccountObject(addr)
 	if stateObject == nil {
 		return
 	}
 	stateObject.IsAlive = isAlive
 }
 
-// Exist 检查账户是否存在
-func (accSt *CacheState) Exist(addr common.Address) bool {
-	return accSt.getAccountObject(addr) != nil
-}
-
-// Empty 是否是空账户
-func (accSt *CacheState) Empty(addr common.Address) bool {
-	so := accSt.getAccountObject(addr)
-	return so == nil || so.Empty()
-}
-
 // AddAddressToAccessList adds the given address to the access list
-func (accSt *CacheState) AddAddressToAccessList(addr common.Address) {
+func (s *CacheState) AddAddressToAccessList(addr common.Address) {
 }
 
 // AddSlotToAccessList adds the given (address, slot)-tuple to the access list
-func (accSt *CacheState) AddSlotToAccessList(addr common.Address, slot common.Hash) {
+func (s *CacheState) AddSlotToAccessList(addr common.Address, slot common.Hash) {
 }
 
 // SlotInAccessList returns true if the given (address, slot)-tuple is in the access list.
-func (accSt *CacheState) SlotInAccessList(addr common.Address, slot common.Hash) (addressPresent bool, slotPresent bool) {
+func (s *CacheState) SlotInAccessList(addr common.Address, slot common.Hash) (addressPresent bool, slotPresent bool) {
 	return true, true
 }
 
 // RevertToSnapshot ...
-func (accSt *CacheState) RevertToSnapshot(revid int) {
+func (s *CacheState) RevertToSnapshot(revid int) {
 	// Find the snapshot in the stack of valid snapshots.
-	idx := sort.Search(len(accSt.ValidRevisions), func(i int) bool {
-		return accSt.ValidRevisions[i].id >= revid
+	idx := sort.Search(len(s.ValidRevisions), func(i int) bool {
+		return s.ValidRevisions[i].id >= revid
 	})
-	if idx == len(accSt.ValidRevisions) || accSt.ValidRevisions[idx].id != revid {
+	if idx == len(s.ValidRevisions) || s.ValidRevisions[idx].id != revid {
 		panic(fmt.Errorf("revision id %v cannot be reverted", revid))
 	}
-	snapshot := accSt.ValidRevisions[idx].journalIndex
+	snapshot := s.ValidRevisions[idx].journalIndex
 
 	// Replay the journal to undo changes and remove invalidated snapshots
-	accSt.Journal.revert(accSt, snapshot)
-	accSt.ValidRevisions = accSt.ValidRevisions[:idx]
+	s.Journal.revert(s, snapshot)
+	s.ValidRevisions = s.ValidRevisions[:idx]
 }
 
 // Snapshot ...
-func (accSt *CacheState) Snapshot() int {
-	id := accSt.NextRevisionId
-	accSt.NextRevisionId++
-	accSt.ValidRevisions = append(accSt.ValidRevisions, revision{id, accSt.Journal.length()})
+func (s *CacheState) Snapshot() int {
+	id := s.NextRevisionId
+	s.NextRevisionId++
+	s.ValidRevisions = append(s.ValidRevisions, revision{id, s.Journal.length()})
 	return id
 }
 
 // AddLog
-func (accSt *CacheState) AddLog(log *types.Log) {
-	log.TxHash = accSt.thash
-	log.TxIndex = uint(accSt.txIndex)
-	log.Index = accSt.logSize
-	accSt.Logs[accSt.thash] = append(accSt.Logs[accSt.thash], log)
+func (s *CacheState) AddLog(log *types.Log) {
+	log.TxHash = s.thash
+	log.TxIndex = uint(s.txIndex)
+	log.Index = s.logSize
+	s.Logs[s.thash] = append(s.Logs[s.thash], log)
 }
 
 // AddPreimage
-func (accSt *CacheState) AddPreimage(hash common.Hash, preimage []byte) {
+func (s *CacheState) AddPreimage(hash common.Hash, preimage []byte) {
 }
 
-func (accSt *CacheState) Prepare(rules params.Rules, sender, coinbase common.Address, dst *common.Address, precompiles []common.Address, list types.AccessList) {
+func (s *CacheState) Prepare(rules params.Rules, sender, coinbase common.Address, dst *common.Address, precompiles []common.Address, list types.AccessList) {
 }
 
 // AddressInAccessList returns true if the given address is in the access list.
-func (accSt *CacheState) AddressInAccessList(addr common.Address) bool {
+func (s *CacheState) AddressInAccessList(addr common.Address) bool {
 	return true
 }
 
@@ -380,7 +429,7 @@ func (s *CacheState) SetTxStateErr(thash common.Hash, ti int) {
 	s.StateJudge = false
 }
 
-func (s *CacheState) Prefetch(statedb *state.StateDB, rwSets []*accesslist.RWSet) {
+func (s *CacheState) Prefetch(statedb vm.StateDB, rwSets []*accesslist.RWSet) {
 	// 预取时置prefetching为true
 	s.prefetching = true
 	for _, rwSet := range rwSets {
@@ -395,28 +444,35 @@ func (s *CacheState) Prefetch(statedb *state.StateDB, rwSets []*accesslist.RWSet
 			}
 		}
 	}
+	// fmt.Println("After prefetching, the cache state judge is:", s.StateJudge)
 	// 预取结束后置prefetching为false
 	s.prefetching = false
 }
 
-func (s *CacheState) prefetchSetter(addr common.Address, hash common.Hash, statedb *state.StateDB) {
+func (s *CacheState) prefetchSetter(addr common.Address, hash common.Hash, statedb vm.StateDB) {
+	if s.prefectched.Contains(addr, hash) {
+		return
+	}
+	s.prefectched.Add(addr, hash)
+
 	s.CreateAccount(addr)
 	switch hash {
 	case accesslist.BALANCE:
-		s.SetBalance(addr, statedb.GetBalance(addr))
+		s.setBalancePrefetch(addr, statedb.GetBalance(addr))
 	case accesslist.NONCE:
-		s.SetNonce(addr, statedb.GetNonce(addr))
+		s.setNoncePrefetch(addr, statedb.GetNonce(addr))
 	case accesslist.CODEHASH:
-		s.SetCode(addr, statedb.GetCode(addr)) // 这里拆得不够细
+		s.setCodeHashPrefetch(addr, statedb.GetCodeHash(addr))
 	case accesslist.CODE:
-		s.SetCode(addr, statedb.GetCode(addr))
+		s.setCodePrefetch(addr, statedb.GetCode(addr))
 	case accesslist.ALIVE:
-		s.SetIsAlive(addr, statedb.Exist(addr))
+		s.setIsAlivePrefetch(addr, statedb.Exist(addr))
 	default:
-		s.SetState(addr, hash, statedb.GetState(addr, hash))
+		s.setStatePrefetch(addr, hash, statedb.GetState(addr, hash))
 	}
 }
 
+// ! we can use write set to optimize the merge process
 func (s *CacheState) MergeState(statedb *state.StateDB) {
 	// 将状态合并到原有stateDB(直接set)
 	for addr, aoj := range s.Accounts {
