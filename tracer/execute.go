@@ -1,15 +1,19 @@
 package tracer
 
 import (
+	"fmt"
 	cachestate "interact/cacheState"
 	"interact/core"
+	"sync"
 	"time"
 
+	"github.com/alitto/pond"
 	"github.com/devchat-ai/gopool"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/panjf2000/ants/v2"
 )
 
 // This function execute without generating tracer.list
@@ -89,4 +93,50 @@ func ExecuteWithGopoolStateDB(pool gopool.GoPool, txsGroups []types.Transactions
 		})
 	}
 	pool.Wait()
+}
+
+// Execute with ants Pool with cacheState
+func ExecuteWithAntsCacheState(pool *ants.Pool, txsGroups []types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
+	// Create a wait group to track the completion of all tasks
+	// Iterate over the txsGroups
+	for j := 0; j < len(txsGroups); j++ {
+		taskNum := j
+
+		// Submit tasks to the ants pool
+		err := pool.Submit(func() {
+			st := time.Now()
+			ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
+			executionTime := time.Since(st)
+			fmt.Println("Execution time:", executionTime)
+			wg.Done() // Mark the task as completed
+		})
+
+		if err != nil {
+			// Handle error if submitting task fails
+			// You can choose to log the error or take appropriate action
+			fmt.Println("Error submitting task to ants pool:", err)
+			wg.Done() // Mark the task as completed to avoid deadlock
+		}
+	}
+
+	// Wait for all tasks to complete
+	wg.Wait()
+}
+
+// Execute with pond Pool with cacheState
+func ExecuteWithPondCacheState(pool *pond.WorkerPool, txsGroups []types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext) {
+	// Iterate over the txsGroups
+	for j := 0; j < len(txsGroups); j++ {
+		taskNum := j
+
+		// Submit tasks to the pond pool
+		pool.Submit(func() {
+			st := time.Now()
+			ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
+			executionTime := time.Since(st)
+			fmt.Println("Execution time:", executionTime)
+		})
+	}
+
+	pool.StopAndWait()
 }
