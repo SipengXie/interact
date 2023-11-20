@@ -38,7 +38,7 @@ func executeTx(statedb vm.StateDB, tx *types.Transaction, header *types.Header, 
 
 	switch statedb.(type) {
 	case *cachestate.CacheState:
-		if statedb.(*cachestate.CacheState).StateJudge == false {
+		if !statedb.(*cachestate.CacheState).StateJudge {
 			statedb.(*cachestate.CacheState).StateJudge = true
 			// This error means the prediction is false, and the transaction should be reverted
 			statedb.RevertToSnapshot(snapshot)
@@ -71,8 +71,8 @@ func ExecuteWithGopoolCacheState(pool gopool.GoPool, txsGroups []types.Transacti
 		taskNum := j
 		pool.AddTask(func() (interface{}, error) {
 			st := time.Now()
-			errs := ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
-			fmt.Println(errs)
+			err := ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
+			fmt.Println(err)
 			return time.Since(st), nil
 		})
 	}
@@ -105,10 +105,10 @@ func ExecuteWithAntsCacheState(pool *ants.Pool, txsGroups []types.Transactions, 
 
 		// Submit tasks to the ants pool
 		err := pool.Submit(func() {
-			st := time.Now()
+			// st := time.Now()
 			ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
-			executionTime := time.Since(st)
-			fmt.Println("Execution time:", executionTime)
+			// executionTime := time.Since(st)
+			// fmt.Println("Execution time:", executionTime)
 			wg.Done() // Mark the task as completed
 		})
 
@@ -134,6 +134,7 @@ func ExecuteWithPondCacheState(pool *pond.WorkerPool, txsGroups []types.Transact
 		pool.Submit(func() {
 			st := time.Now()
 			ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
+			// fmt.Println(err)
 			executionTime := time.Since(st)
 			fmt.Println("Execution time:", executionTime)
 		})
