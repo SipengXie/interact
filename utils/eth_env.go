@@ -18,6 +18,7 @@ func GetEthDatabaseAndStateDatabase() (*node.Node, ethdb.Database, statedb.Datab
 	if err != nil {
 		panic(err)
 	}
+
 	ethCfg := ethconfig.Defaults
 	chainDB, err := Node.OpenDatabase("chaindata", ethCfg.DatabaseCache, ethCfg.DatabaseHandles, "eth/db/chaindata/", true)
 	if err != nil {

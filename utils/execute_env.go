@@ -41,24 +41,7 @@ func PredictRWSets(tx *types.Transaction, chainDB ethdb.Database, sdbBackend sta
 	return list
 }
 
-func GenerateTxAndRWSetGroups(vertexGroup [][]*conflictgraph.Vertex, txs types.Transactions, predictRWSets accesslist.RWSetList) ([]types.Transactions, []accesslist.RWSetList) {
-	// From vertex group to transaction group
-	txsGroup := make([]types.Transactions, len(vertexGroup))
-	RWSetsGroup := make([]accesslist.RWSetList, len(vertexGroup))
-	for i := 0; i < len(vertexGroup); i++ {
-		sort.Slice(vertexGroup[i], func(j, k int) bool {
-			return vertexGroup[i][j].TxId < vertexGroup[i][k].TxId
-		})
-
-		for j := 0; j < len(vertexGroup[i]); j++ {
-			txsGroup[i] = append(txsGroup[i], txs[vertexGroup[i][j].TxId])
-			RWSetsGroup[i] = append(RWSetsGroup[i], predictRWSets[vertexGroup[i][j].TxId])
-		}
-	}
-	return txsGroup, RWSetsGroup
-}
-
-func GenerateVertexGroups(txs types.Transactions, predictRWSets []*accesslist.RWSet) [][]*conflictgraph.Vertex {
+func generateUndiGraph(txs types.Transactions, predictRWSets []*accesslist.RWSet) *conflictgraph.UndirectedGraph {
 	undiConfGraph := conflictgraph.NewUndirectedGraph()
 	for i, tx := range txs {
 		if predictRWSets[i] == nil {
@@ -76,9 +59,89 @@ func GenerateVertexGroups(txs types.Transactions, predictRWSets []*accesslist.RW
 			}
 		}
 	}
+	return undiConfGraph
+}
 
+func generateVertexGroups(txs types.Transactions, predictRWSets []*accesslist.RWSet) [][]*conflictgraph.Vertex {
+	undiConfGraph := generateUndiGraph(txs, predictRWSets)
 	groups := undiConfGraph.GetConnectedComponents()
 	return groups
+}
+
+func GetTxsPredictsAndHeaders(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) ([]types.Transactions, []accesslist.RWSetList, []*types.Header) {
+	// Try to expand transaction lists
+	txs := make([]types.Transactions, endNum-startNum+1)
+	predictRWSets := make([]accesslist.RWSetList, endNum-startNum+1)
+	headers := make([]*types.Header, endNum-startNum+1)
+	TotalTxsNum := 0
+
+	// generate predictlist, txslist and headerlist
+	for height := startNum; height <= endNum; height++ {
+		// for each block, we predict its txs
+		block, header := GetBlockAndHeader(chainDB, height)
+		blockTxs := block.Transactions()
+		blockPredicts := make([]*accesslist.RWSet, blockTxs.Len())
+		for j, tx := range blockTxs {
+			blockPredicts[j] = PredictRWSets(tx, chainDB, sdbBackend, height)
+		}
+		txs[height-startNum] = blockTxs
+		predictRWSets[height-startNum] = blockPredicts
+		headers[height-startNum] = header
+		TotalTxsNum += blockTxs.Len()
+	}
+
+	fmt.Println("Transaction Number:", TotalTxsNum)
+
+	return txs, predictRWSets, headers
+}
+
+func GenerateTxAndRWSetGroups(txs types.Transactions, predictRWSets accesslist.RWSetList) ([]types.Transactions, []accesslist.RWSetList) {
+	vertexGroup := generateVertexGroups(txs, predictRWSets)
+	// From vertex group to transaction group
+	txsGroup := make([]types.Transactions, len(vertexGroup))
+	RWSetsGroup := make([]accesslist.RWSetList, len(vertexGroup))
+	for i := 0; i < len(vertexGroup); i++ {
+		sort.Slice(vertexGroup[i], func(j, k int) bool {
+			return vertexGroup[i][j].TxId < vertexGroup[i][k].TxId
+		})
+
+		for j := 0; j < len(vertexGroup[i]); j++ {
+			txsGroup[i] = append(txsGroup[i], txs[vertexGroup[i][j].TxId])
+			RWSetsGroup[i] = append(RWSetsGroup[i], predictRWSets[vertexGroup[i][j].TxId])
+		}
+	}
+	return txsGroup, RWSetsGroup
+}
+
+func GenerateMISGroups(txs types.Transactions, predictRWSets accesslist.RWSetList) [][]uint {
+	undiGraph := generateUndiGraph(txs, predictRWSets)
+	return solveMISInTurn(undiGraph)
+}
+
+func generateDiGraph(txs types.Transactions, predictRWSets []*accesslist.RWSet) *conflictgraph.DirectedGraph {
+	Graph := conflictgraph.NewDirectedGraph()
+	for i, tx := range txs {
+		if predictRWSets[i] == nil {
+			continue
+		}
+		Graph.AddVertex(tx.Hash(), uint(i))
+	}
+	for i := 0; i < txs.Len(); i++ {
+		for j := i + 1; j < txs.Len(); j++ {
+			if predictRWSets[i] == nil || predictRWSets[j] == nil {
+				continue
+			}
+			if predictRWSets[i].HasConflict(*predictRWSets[j]) {
+				Graph.AddEdge(uint(i), uint(j))
+			}
+		}
+	}
+	return Graph
+}
+
+func GenerateDegreeZeroGroups(txs types.Transactions, predictRWSets []*accesslist.RWSet) [][]uint {
+	graph := generateDiGraph(txs, predictRWSets)
+	return graph.GetDegreeZero()
 }
 
 func GenerateCacheStates(db vm.StateDB, RWSetsGroups []accesslist.RWSetList) cachestate.CacheStateList {

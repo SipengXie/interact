@@ -3,160 +3,26 @@ package main
 import (
 	"fmt"
 	"interact/accesslist"
-	conflictgraph "interact/conflictGraph"
+	cachestate "interact/cacheState"
 	"interact/core"
-	"interact/fullstate"
 	"interact/tracer"
 	"interact/utils"
 	"sync"
 	"time"
 
-	"github.com/devchat-ai/gopool"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/panjf2000/ants/v2"
 
-	// "github.com/ethereum/go-ethereum/core/state"
 	statedb "github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
-// two manners to execute the transactions test
-func ExeTestFromStartToEndWithCacheState(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecFromStartToEndWithConnectedComponents(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+	fmt.Println("Connected Components Solution")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
-	// Try to expand transaction lists
-	txs := make([]types.Transactions, endNum-startNum+1)
-	predictRWSets := make([][]*accesslist.RWSet, endNum-startNum+1)
-	headers := make([]*types.Header, endNum-startNum+1)
-	TotalTxsNum := 0
-
-	// generate predictlist, txslist and headerlist
-	for height := startNum; height <= endNum; height++ {
-		// for each block, we predict its txs
-		block, header := utils.GetBlockAndHeader(chainDB, height)
-		blockTxs := block.Transactions()
-		blockPredicts := make([]*accesslist.RWSet, blockTxs.Len())
-		for j, tx := range blockTxs {
-			blockPredicts[j] = utils.PredictRWSets(tx, chainDB, sdbBackend, height)
-		}
-		txs[height-startNum] = blockTxs
-		predictRWSets[height-startNum] = blockPredicts
-		headers[height-startNum] = header
-		TotalTxsNum += blockTxs.Len()
-	}
-
-	fmt.Println("Transaction Number:", TotalTxsNum)
-	// predict the rw access list
-
-	{
-		// get statedb from block[startNum-1].Root
-		state, err := utils.GetState(chainDB, sdbBackend, startNum-1)
-		if err != nil {
-			return err
-		}
-		state.StartPrefetcher("miner")
-		defer state.StopPrefetcher()
-
-		// set the satrt time
-		start := time.Now()
-		// test the serial execution
-		for i := 0; i < len(txs); i++ {
-			tracer.ExecuteTxs(state, txs[i], headers[i], fakeChainCtx)
-		}
-		// cal the execution time
-		elapsed := time.Since(start)
-		fmt.Println("Serial Execution Time:", elapsed)
-	}
-
-	{
-		timeCost := time.Duration(0)
-		pool := gopool.NewGoPool(16, gopool.WithResultCallback(func(result interface{}) {
-			if result.(time.Duration) > timeCost {
-				timeCost = result.(time.Duration)
-			}
-		}))
-		defer pool.Release()
-
-		// // get statedb from block[startNum-1].Root
-		state, err := utils.GetState(chainDB, sdbBackend, startNum-1)
-		if err != nil {
-			return err
-		}
-		// state.StartPrefetcher("miner")
-		// defer state.StopPrefetcher()
-
-		start := time.Now()
-		vertexGroupsList := make([][][]*conflictgraph.Vertex, len(txs))
-		txGroupsList := make([][]types.Transactions, len(txs))
-		RWSetGroupsList := make([][]accesslist.RWSetList, len(txs))
-		for i := 0; i < len(txs); i++ {
-			vertexGroupsList[i] = utils.GenerateVertexGroups(txs[i], predictRWSets[i])
-			txGroupsList[i], RWSetGroupsList[i] = utils.GenerateTxAndRWSetGroups(vertexGroupsList[i], txs[i], predictRWSets[i])
-		}
-		elapsed := time.Since(start)
-		fmt.Println("Generate TxGroups Costs:", elapsed)
-		fmt.Println()
-
-		// !!! Our Prefetch is less efficient than StateDB.Prefetch !!!
-		executeCost := time.Duration(0)
-		for i := 0; i < len(txs); i++ {
-			// // this step simulate that the state is committed
-			// state, _ := GetState(chainDB, sdbBackend, startNum-1+uint64(i))
-			// start = time.Now()
-			// cacheStates := GenerateCacheStatesWithPool(pool, state, RWSetGroupsList[i])
-			// elapsed = time.Since(start)
-			// executeCost += elapsed
-
-			// fmt.Println("Longest Task for Prefecthing Costs:", timeCost)
-			// timeCost = time.Duration(0)
-			startPrefetch := time.Now()
-			cacheStates := utils.GenerateCacheStates(state, RWSetGroupsList[i]) // This step is to warm up the cache
-			elapsedPrefetch := time.Since(startPrefetch)
-			fmt.Println("Prefetching Costs:", elapsedPrefetch)
-
-			start = time.Now()
-			tracer.ExecuteWithGopoolCacheState(pool, txGroupsList[i], cacheStates, headers[i], fakeChainCtx)
-			elapsed = time.Since(start)
-			executeCost += elapsed
-
-			fmt.Println("Longest Task Costs for Execution Costs:", timeCost)
-			timeCost = time.Duration(0)
-			utils.MergeToState(cacheStates, state)
-			// fmt.Println()
-		}
-		fmt.Println("Parallel Execution Time With cacheState:", executeCost)
-	}
-
-	return nil
-}
-
-func ExeTestOneBlockWithCacheState(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
-	fakeChainCtx := core.NewFakeChainContext(chainDB)
-
-	// Try to expand transaction lists
-	txs := make([]types.Transactions, endNum-startNum+1)
-	predictRWSets := make([][]*accesslist.RWSet, endNum-startNum+1)
-	headers := make([]*types.Header, endNum-startNum+1)
-	TotalTxsNum := 0
-
-	// generate predictlist, txslist and headerlist
-	for height := startNum; height <= endNum; height++ {
-		// for each block, we predict its txs
-		block, header := utils.GetBlockAndHeader(chainDB, height)
-		blockTxs := block.Transactions()
-		blockPredicts := make([]*accesslist.RWSet, blockTxs.Len())
-		for j, tx := range blockTxs {
-			blockPredicts[j] = utils.PredictRWSets(tx, chainDB, sdbBackend, height)
-		}
-		txs[height-startNum] = blockTxs
-		predictRWSets[height-startNum] = blockPredicts
-		headers[height-startNum] = header
-		TotalTxsNum += blockTxs.Len()
-	}
-
-	fmt.Println("Transaction Number:", TotalTxsNum)
-	// predict the rw access list
+	txs, predictRWSets, headers := utils.GetTxsPredictsAndHeaders(chainDB, sdbBackend, startNum, endNum)
 
 	// Serial Execution
 	{
@@ -179,64 +45,50 @@ func ExeTestOneBlockWithCacheState(chainDB ethdb.Database, sdbBackend statedb.Da
 
 	// Parallel Execution
 	{
-		timeCost := time.Duration(0)
-		pool := gopool.NewGoPool(16, gopool.WithResultCallback(func(result interface{}) {
-			if result.(time.Duration) > timeCost {
-				timeCost = result.(time.Duration)
-			}
-		}))
-		defer pool.Release()
+		// timeCost := time.Duration(0)
+		// pool := gopool.NewGoPool(16, gopool.WithResultCallback(func(result interface{}) {
+		// 	if result.(time.Duration) > timeCost {
+		// 		timeCost = result.(time.Duration)
+		// 	}
+		// }))
+		// defer pool.Release()
 
-		antsPool, _ := ants.NewPool(16, ants.WithPreAlloc(true))
-		defer antsPool.Release()
 		var antsWG sync.WaitGroup
+		antsPool, _ := ants.NewPoolWithFunc(16, func(params interface{}) {
+			defer antsWG.Done()
+			ExecParams := params.(*tracer.ParameterForTxGroup)
+			tracer.ExecuteTxs(ExecParams.CacheState, ExecParams.TxsGroup, ExecParams.Header, ExecParams.ChainCtx)
+		}, ants.WithPreAlloc(true))
+		defer antsPool.Release()
 
 		// pondPool := pond.New(16, len(txs), pond.MinWorkers(10))
 
-		// use the same state to predict
-		// 1 get the block and txs
-		block, header := utils.GetBlockAndHeader(chainDB, startNum)
-		blockTransactions := block.Transactions()
-
-		// 2 New a statedb(get statedb from block[startNum-1].Root)
 		state, err := utils.GetState(chainDB, sdbBackend, startNum-1)
 		if err != nil {
 			return err
 		}
-		// new the fullstate
-		fulldb := fullstate.NewFullState(state.Copy()) // use copy
-		// fulldb := fullstate.NewFullState(state) // no use the copy
-
-		// 3 Predict the rw access list
-		blockPredicts := make([]*accesslist.RWSet, blockTransactions.Len())
-		for j, tx := range blockTransactions {
-			blockPredicts[j], err = tracer.ExecToGenerateRWSet(fulldb, tx, header, fakeChainCtx)
-			if err != nil {
-				fmt.Println("NIL tx hash:", tx.Hash())
-			}
-		}
 
 		start := time.Now()
-		vertexGroupsList := make([][][]*conflictgraph.Vertex, len(txs))
+
 		txGroupsList := make([][]types.Transactions, len(txs))
 		RWSetGroupsList := make([][]accesslist.RWSetList, len(txs))
 		for i := 0; i < len(txs); i++ {
-			vertexGroupsList[i] = utils.GenerateVertexGroups(txs[i], predictRWSets[i])
-			txGroupsList[i], RWSetGroupsList[i] = utils.GenerateTxAndRWSetGroups(vertexGroupsList[i], txs[i], predictRWSets[i])
+			txGroupsList[i], RWSetGroupsList[i] = utils.GenerateTxAndRWSetGroups(txs[i], predictRWSets[i])
 		}
 		elapsed := time.Since(start)
 		fmt.Println("Generate TxGroups Costs:", elapsed)
-		fmt.Println()
 
 		// !!! Our Prefetch is less efficient than StateDB.Prefetch !!!
 		executeCost := time.Duration(0)
+		PureExecCost := time.Duration(0)
 		for i := 0; i < len(txs); i++ {
 			utils.GenerateCacheStates(state, RWSetGroupsList[i]) // trick!!!!!!!!!!!
 
 			startPrefetch := time.Now()
 			cacheStates := utils.GenerateCacheStates(state, RWSetGroupsList[i]) // This step is to warm up the cache
 			elapsedPrefetch := time.Since(startPrefetch)
-			fmt.Println("Prefetching Costs:", elapsedPrefetch)
+			executeCost += elapsedPrefetch
+			// fmt.Println("Prefetching Costs:", elapsedPrefetch)
 
 			start = time.Now()
 			// use gopool
@@ -251,19 +103,200 @@ func ExeTestOneBlockWithCacheState(chainDB ethdb.Database, sdbBackend statedb.Da
 
 			elapsed = time.Since(start)
 			executeCost += elapsed
+			PureExecCost += elapsed
 
-			fmt.Println("Longest Task Costs for Execution Costs:", timeCost)
-			timeCost = time.Duration(0)
+			// fmt.Println("Longest Task Costs for Execution Costs:", timeCost)
+			// timeCost = time.Duration(0)
 
 			startMerge := time.Now()
 			utils.MergeToState(cacheStates, state)
 			elapsedMerge := time.Since(startMerge)
-			fmt.Println("Merge Costs:", elapsedMerge)
+			// fmt.Println("Merge Costs:", elapsedMerge)
+			executeCost += elapsedMerge
 		}
 
-		fmt.Println("Parallel Execution Time With cacheState:", executeCost)
+		fmt.Println("Execution Time:", executeCost)
+		fmt.Println("PureExecution Time:", PureExecCost)
 	}
 
+	return nil
+}
+
+func ExecFromStartToEndWithDirectedGraph(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+	fmt.Println("DegreeZero Solution")
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
+
+	txs, predictRWSets, headers := utils.GetTxsPredictsAndHeaders(chainDB, sdbBackend, startNum, endNum)
+
+	// {
+	// 	// get statedb from block[startNum-1].Root
+	// 	state, err := utils.GetState(chainDB, sdbBackend, startNum-1)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	state.StartPrefetcher("miner")
+	// 	defer state.StopPrefetcher()
+
+	// 	// set the satrt time
+	// 	start := time.Now()
+	// 	// test the serial execution
+	// 	for i := 0; i < len(txs); i++ {
+	// 		tracer.ExecuteTxs(state, txs[i], headers[i], fakeChainCtx)
+	// 	}
+	// 	// cal the execution time
+	// 	elapsed := time.Since(start)
+	// 	fmt.Println("Serial Execution Time:", elapsed)
+	// }
+
+	{
+		state, err := utils.GetState(chainDB, sdbBackend, startNum-1)
+		if err != nil {
+			return err
+		}
+
+		antsPool, _ := ants.NewPool(16, ants.WithPreAlloc(true))
+		defer antsPool.Release()
+		var antsWG sync.WaitGroup
+
+		for i := 0; i < len(txs); i++ {
+			// the i'th block
+			st := time.Now()
+			groups := utils.GenerateDegreeZeroGroups(txs[i], predictRWSets[i])
+			fmt.Println("Generate TxGroups:", time.Since(st))
+			fullcache := cachestate.NewStateDB()
+			// here we don't pre warm the data
+			fullcache.Prefetch(state, predictRWSets[i])
+			st = time.Now()
+			PureExecutionCost := time.Duration(0)
+			PurePrefetchCost := time.Duration(0) // without considering the very first fullcache prefetch
+			PureMergeCost := time.Duration(0)
+			for round := 0; round < len(groups); round++ {
+				// here we can add logic if len(groups[round]) if less than a threshold
+
+				// Create groups to execute
+				txsToExec := make(types.Transactions, len(groups[round]))
+				cacheStates := make(cachestate.CacheStateList, len(groups[round]))
+				antsWG.Add(len(groups[round]))
+
+				for index := 0; index < len(groups[round]); index++ {
+					// only prefectch for one transaction
+					// groups[round][index] is the very tx we want to add to pool
+					txid := groups[round][index]
+					tx := txs[i][txid]
+					cacheForOneTx := cachestate.NewStateDB()
+					prefst := time.Now()
+					cacheForOneTx.Prefetch(fullcache, accesslist.RWSetList{predictRWSets[i][txid]})
+					PurePrefetchCost += time.Since(prefst)
+
+					txsToExec[index] = tx
+					cacheStates[index] = cacheForOneTx
+				}
+				execst := time.Now()
+				tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, headers[i], fakeChainCtx, &antsWG)
+				PureExecutionCost += time.Since(execst)
+
+				mergest := time.Now()
+				utils.MergeToCacheState(cacheStates, fullcache)
+				PureMergeCost += time.Since(mergest)
+			}
+			utils.MergeToState(cachestate.CacheStateList{fullcache}, state)
+
+			fmt.Println("Execution Time:", time.Since(st))
+			fmt.Println("PureExection Time:", PureExecutionCost)
+			fmt.Println("PurePrefetchInTurn Time:", PurePrefetchCost)
+			fmt.Println("PureMergeInTurn Time:", PureMergeCost)
+		}
+
+	}
+
+	return nil
+}
+
+func ExecFromStartToEndWithMIS(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+	fmt.Println("MIS Solution")
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
+
+	txs, predictRWSets, headers := utils.GetTxsPredictsAndHeaders(chainDB, sdbBackend, startNum, endNum)
+
+	// {
+	// 	// get statedb from block[startNum-1].Root
+	// 	state, err := utils.GetState(chainDB, sdbBackend, startNum-1)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// 	state.StartPrefetcher("miner")
+	// 	defer state.StopPrefetcher()
+
+	// 	// set the satrt time
+	// 	start := time.Now()
+	// 	// test the serial execution
+	// 	for i := 0; i < len(txs); i++ {
+	// 		tracer.ExecuteTxs(state, txs[i], headers[i], fakeChainCtx)
+	// 	}
+	// 	// cal the execution time
+	// 	elapsed := time.Since(start)
+	// 	fmt.Println("Serial Execution Time:", elapsed)
+	// }
+
+	{
+		state, err := utils.GetState(chainDB, sdbBackend, startNum-1)
+		if err != nil {
+			return err
+		}
+
+		antsPool, _ := ants.NewPool(16, ants.WithPreAlloc(true))
+		defer antsPool.Release()
+		var antsWG sync.WaitGroup
+
+		for i := 0; i < len(txs); i++ {
+			// the i'th block
+			st := time.Now()
+			groups := utils.GenerateMISGroups(txs[i], predictRWSets[i])
+			fmt.Println("Generate TxGroups:", time.Since(st))
+			fullcache := cachestate.NewStateDB()
+
+			// here we don't pre warm the data
+			fullcache.Prefetch(state, predictRWSets[i])
+			st = time.Now()
+			PureExecutionCost := time.Duration(0)
+			PurePrefetchCost := time.Duration(0) // without considering the very first fullcache prefetch
+			PureMergeCost := time.Duration(0)
+			for round := 0; round < len(groups); round++ {
+				// here we can add logic if len(groups[round]) if less than a threshold
+
+				// Create groups to execute
+				txsToExec := make(types.Transactions, len(groups[round]))
+				cacheStates := make(cachestate.CacheStateList, len(groups[round]))
+				antsWG.Add(len(groups[round]))
+
+				for index := 0; index < len(groups[round]); index++ {
+					// only prefectch for one transaction
+					// groups[round][index] is the very tx we want to add to pool
+					txid := groups[round][index]
+					tx := txs[i][txid]
+					cacheForOneTx := cachestate.NewStateDB()
+					prefst := time.Now()
+					cacheForOneTx.Prefetch(fullcache, accesslist.RWSetList{predictRWSets[i][txid]})
+					PurePrefetchCost += time.Since(prefst)
+
+					txsToExec[index] = tx
+					cacheStates[index] = cacheForOneTx
+				}
+				execst := time.Now()
+				tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, headers[i], fakeChainCtx, &antsWG)
+				PureExecutionCost += time.Since(execst)
+
+				mergest := time.Now()
+				utils.MergeToCacheState(cacheStates, fullcache)
+				PureMergeCost += time.Since(mergest)
+			}
+			utils.MergeToState(cachestate.CacheStateList{fullcache}, state)
+			fmt.Println("Execution Time:", time.Since(st))
+			fmt.Println("PureExection Time:", PureExecutionCost)
+			fmt.Println("PurePrefetchInTurn Time:", PurePrefetchCost)
+			fmt.Println("PureMergeInTurn Time:", PureMergeCost)
+		}
+	}
 	return nil
 }
 
@@ -273,11 +306,11 @@ func main() {
 
 	head := rawdb.ReadHeadBlockHash(chainDB)
 	num := *rawdb.ReadHeaderNumber(chainDB, head)
-	// IterateBlock(chainDB, sdbBackend, num)
-	// CompareTracerAndFulldb(chainDB, sdbBackend, num)
-	// ExeTestFromStartToEndWithCacheState(chainDB, sdbBackend, num-19, num)
-	// ExeTestFromStartToEndWithStateDB(chainDB, sdbBackend, num, num)
 
 	// just test one block
-	ExeTestOneBlockWithCacheState(chainDB, sdbBackend, num, num)
+	ExecFromStartToEndWithConnectedComponents(chainDB, sdbBackend, num, num)
+	fmt.Println()
+	ExecFromStartToEndWithDirectedGraph(chainDB, sdbBackend, num, num)
+	fmt.Println()
+	ExecFromStartToEndWithMIS(chainDB, sdbBackend, num, num)
 }

@@ -486,3 +486,17 @@ func (s *CacheState) MergeState(statedb *state.StateDB) {
 		// root 应该不需要再set
 	}
 }
+
+func (s *CacheState) MergeStateToCacheState(statedb *CacheState) {
+	// 将状态合并到原有stateDB(直接set)
+	for addr, aoj := range s.Accounts {
+		// 将Data依次进行Set
+		statedb.SetBalance(addr, aoj.GetBalance())
+		statedb.SetNonce(addr, aoj.GetNonce())
+		statedb.SetCode(addr, aoj.Code())
+		for slot, value := range aoj.CacheStorage {
+			statedb.SetState(addr, slot, value)
+		}
+		// root 应该不需要再set
+	}
+}

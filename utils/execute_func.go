@@ -12,3 +12,10 @@ func MergeToState(cacheStates cachestate.CacheStateList, db *statedb.StateDB) {
 		cacheStates[i].MergeState(db)
 	}
 }
+
+// MergeToState merge all cacheStateDB to origin stateDB
+func MergeToCacheState(cacheStates cachestate.CacheStateList, db *cachestate.CacheState) {
+	for i := 0; i < len(cacheStates); i++ {
+		cacheStates[i].MergeStateToCacheState(db)
+	}
+}

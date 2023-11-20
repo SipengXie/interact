@@ -1,6 +1,8 @@
 package conflictgraph
 
-import "github.com/ethereum/go-ethereum/common"
+import (
+	"github.com/ethereum/go-ethereum/common"
+)
 
 // UndirectedGraph 表示无向图
 type DirectedGraph struct {
@@ -55,7 +57,7 @@ func (g *DirectedGraph) GetDegreeZero() [][]uint {
 	for {
 		newDegreeZero := make([]uint, 0)
 		for _, vid := range degreeZero {
-			for neighborid, _ := range g.AdjacencyMap[vid] {
+			for neighborid := range g.AdjacencyMap[vid] {
 				g.Vertices[neighborid].Degree--
 				if g.Vertices[neighborid].Degree == 0 {
 					newDegreeZero = append(newDegreeZero, neighborid)

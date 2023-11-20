@@ -96,31 +96,50 @@ func ExecuteWithGopoolStateDB(pool gopool.GoPool, txsGroups []types.Transactions
 	pool.Wait()
 }
 
+type ParameterForTxGroup struct {
+	TxsGroup   types.Transactions
+	CacheState *cachestate.CacheState
+	Header     *types.Header
+	ChainCtx   core.ChainContext
+}
+
 // Execute with ants Pool with cacheState
-func ExecuteWithAntsCacheState(pool *ants.Pool, txsGroups []types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
-	// Create a wait group to track the completion of all tasks
-	// Iterate over the txsGroups
+func ExecuteWithAntsCacheState(pool *ants.PoolWithFunc, txsGroups []types.Transactions, CacheStates cachestate.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
+
 	for j := 0; j < len(txsGroups); j++ {
 		taskNum := j
-
 		// Submit tasks to the ants pool
-		err := pool.Submit(func() {
-			// st := time.Now()
-			ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
-			// executionTime := time.Since(st)
-			// fmt.Println("Execution time:", executionTime)
-			wg.Done() // Mark the task as completed
-		})
-
+		args := &ParameterForTxGroup{
+			TxsGroup:   txsGroups[taskNum],
+			CacheState: CacheStates[taskNum],
+			Header:     header,
+			ChainCtx:   chainCtx,
+		}
+		err := pool.Invoke(args)
 		if err != nil {
-			// Handle error if submitting task fails
-			// You can choose to log the error or take appropriate action
-			fmt.Println("Error submitting task to ants pool:", err)
-			wg.Done() // Mark the task as completed to avoid deadlock
+			fmt.Println(err)
 		}
 	}
 
 	// Wait for all tasks to complete
+	wg.Wait()
+}
+
+// Concurrently execute single transaction, rather than transaction groups
+func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
+
+	for i := 0; i < len(txs); i++ {
+		taskNum := i
+		evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, CacheStates[taskNum], params.MainnetChainConfig, vm.Config{})
+		// Submit tasks to the ants pool
+		err := pool.Submit(func() {
+			executeTx(CacheStates[taskNum], txs[taskNum], header, chainCtx, evm)
+		})
+		if err != nil {
+			fmt.Println("Error submitting task to ants pool:", err)
+		}
+		wg.Done() // Mark the task as completed
+	}
 	wg.Wait()
 }
 
