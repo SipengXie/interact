@@ -9,7 +9,7 @@ type Vertex struct {
 	TxId      uint        `json:"txId"`   // 顶点的 TxId
 	TxHash    common.Hash `json:"txHash"` // 顶点的 TxHash
 	IsDeleted bool        `json:"isDeleted"`
-	Degree    uint        `json:"degree"` // 顶点的度
+	Degree    uint        `json:"degree"` // 顶点的度, 在有向图里之代表入度
 }
 
 // UndirectedGraph 表示无向图

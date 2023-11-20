@@ -523,6 +523,6 @@ func main() {
 	num := *rawdb.ReadHeaderNumber(chainDB, head)
 	// IterateBlock(chainDB, sdbBackend, num)
 	// CompareTracerAndFulldb(chainDB, sdbBackend, num)
-	ExeTestFromStartToEndWithCacheState(chainDB, sdbBackend, num-19, num)
+	ExeTestFromStartToEndWithCacheState(chainDB, sdbBackend, num, num)
 	// ExeTestFromStartToEndWithStateDB(chainDB, sdbBackend, num, num)
 }

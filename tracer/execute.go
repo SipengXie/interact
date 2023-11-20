@@ -1,6 +1,7 @@
 package tracer
 
 import (
+	"fmt"
 	cachestate "interact/cacheState"
 	"interact/core"
 	"time"
@@ -67,7 +68,8 @@ func ExecuteWithGopoolCacheState(pool gopool.GoPool, txsGroups []types.Transacti
 		taskNum := j
 		pool.AddTask(func() (interface{}, error) {
 			st := time.Now()
-			ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
+			errs := ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
+			fmt.Println(errs)
 			return time.Since(st), nil
 		})
 	}
