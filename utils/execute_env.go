@@ -9,14 +9,14 @@ import (
 	"interact/fullstate"
 	"interact/tracer"
 	"sort"
-	"time"
+	"sync"
 
-	"github.com/devchat-ai/gopool"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	statedb "github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/panjf2000/ants/v2"
 )
 
 // PredictRWSets predict a tx rwsets in a block with accesslist
@@ -157,31 +157,48 @@ func GenerateCacheStates(db vm.StateDB, RWSetsGroups []accesslist.RWSetList) cac
 	return cacheStates
 }
 
-// GenerateCacheStatesWithPool this function try to prefectch concurrently
-// ! Cannot Continously run, for the hot data copy is...
-func GenerateCacheStatesWithGopool(pool gopool.GoPool, db *statedb.StateDB, RWSetsGroups []accesslist.RWSetList) cachestate.CacheStateList {
-	// cannot concurrent prefetch due to the statedb is not thread safe
-	// st := time.Now()
-	dbList := make([]*statedb.StateDB, len(RWSetsGroups))
+func GenerateCacheStatesConcurrent(pool *ants.Pool, db vm.StateDB, RWSetsGroups []accesslist.RWSetList, wg *sync.WaitGroup) cachestate.CacheStateList {
 	cacheStates := make([]*cachestate.CacheState, len(RWSetsGroups))
 	for i := 0; i < len(RWSetsGroups); i++ {
-		cacheStates[i] = cachestate.NewStateDB()
-		dbList[i] = db.Copy()
-	}
-
-	for i := 0; i < len(RWSetsGroups); i++ {
 		if RWSetsGroups[i] == nil {
+			wg.Done()
 			continue
 		}
-		taskNum := i
-		pool.AddTask(func() (interface{}, error) {
-			st := time.Now()
-			cacheStates[taskNum].Prefetch(dbList[taskNum], RWSetsGroups[taskNum])
-			return time.Since(st), nil
+		index := i
+		err := pool.Submit(func() {
+			cacheStates[index] = cachestate.NewStateDB()
+			cacheStates[index].Prefetch(db, RWSetsGroups[index])
+			wg.Done()
 		})
+		if err != nil {
+			fmt.Println("Error submitting task to ants pool:", err)
+			wg.Done()
+		}
 	}
-	pool.Wait()
-
-	// fmt.Println("Concurrent Prefetching cost:", time.Since(st))
+	wg.Wait()
 	return cacheStates
+}
+
+func GenerateTxsAndCacheStatesWithAnts(pool *ants.Pool, db *cachestate.FullCacheConcurrent, group []uint, txs types.Transactions, predictList accesslist.RWSetList, wg *sync.WaitGroup) (types.Transactions, cachestate.CacheStateList) {
+	txsToExec := make(types.Transactions, len(group))
+	cacheStates := make([]*cachestate.CacheState, len(group))
+	for i := 0; i < len(group); i++ {
+		index := i
+		txid := group[index]
+		tx := txs[txid]
+		txsToExec[index] = tx
+
+		err := pool.Submit(func() {
+			cacheStates[index] = cachestate.NewStateDB()
+			cacheStates[index].Prefetch(db, accesslist.RWSetList{predictList[txid]})
+			wg.Done() // Mark the task as completed
+		})
+		if err != nil {
+			fmt.Println("Error submitting task to ants pool:", err)
+			wg.Done() // Mark the task as completed
+		}
+
+	}
+	wg.Wait()
+	return txsToExec, cacheStates
 }

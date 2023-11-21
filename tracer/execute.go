@@ -103,7 +103,7 @@ type ParameterForTxGroup struct {
 	ChainCtx   core.ChainContext
 }
 
-// Execute with ants Pool with cacheState
+// Execute with ants FuncPool with cacheState
 func ExecuteWithAntsCacheState(pool *ants.PoolWithFunc, txsGroups []types.Transactions, CacheStates cachestate.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
 
 	for j := 0; j < len(txsGroups); j++ {
@@ -125,6 +125,24 @@ func ExecuteWithAntsCacheState(pool *ants.PoolWithFunc, txsGroups []types.Transa
 	wg.Wait()
 }
 
+// Execute with ants Pool with cacheState
+func ExecuteWithAntsPool(pool *ants.Pool, txsGroups []types.Transactions, CacheStates cachestate.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
+
+	for j := 0; j < len(txsGroups); j++ {
+		taskNum := j
+		err := pool.Submit(func() {
+			ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
+			wg.Done() // Mark the task as completed
+		})
+		if err != nil {
+			fmt.Println(err)
+			wg.Done() // Mark the task as completed
+		}
+	}
+	// Wait for all tasks to complete
+	wg.Wait()
+}
+
 // Concurrently execute single transaction, rather than transaction groups
 func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
 
@@ -134,11 +152,12 @@ func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactio
 		// Submit tasks to the ants pool
 		err := pool.Submit(func() {
 			executeTx(CacheStates[taskNum], txs[taskNum], header, chainCtx, evm)
+			wg.Done() // Mark the task as completed
 		})
 		if err != nil {
 			fmt.Println("Error submitting task to ants pool:", err)
+			wg.Done() // Mark the task as completed
 		}
-		wg.Done() // Mark the task as completed
 	}
 	wg.Wait()
 }
