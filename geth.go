@@ -88,44 +88,43 @@ func ExecFromStartToEndWithConnectedComponents(chainDB ethdb.Database, sdbBacken
 		fmt.Println("Generate TxGroups Costs:", elapsed)
 
 		// !!! Our Prefetch is less efficient than StateDB.Prefetch !!!
-		executeCost := time.Duration(0)
-		PureExecCost := time.Duration(0)
+
 		for i := 0; i < len(txs); i++ {
 			utils.GenerateCacheStates(state, RWSetGroupsList[i]) // trick!!!!!!!!!!!
 
+			st := time.Now()
+			PureExecutionCost := time.Duration(0)
+			PurePrefetchCost := time.Duration(0) // without considering the very first fullcache prefetch
+			PureMergeCost := time.Duration(0)
+
 			startPrefetch := time.Now()
 			cacheStates := utils.GenerateCacheStates(state, RWSetGroupsList[i]) // This step is to warm up the cache
-			elapsedPrefetch := time.Since(startPrefetch)
-			executeCost += elapsedPrefetch
+			PurePrefetchCost = time.Since(startPrefetch)
 			// fmt.Println("Prefetching Costs:", elapsedPrefetch)
 
-			start = time.Now()
 			// use gopool
 			// tracer.ExecuteWithGopoolCacheState(pool, txGroupsList[i], cacheStates, headers[i], fakeChainCtx)
 
 			// use ants pool
+			start = time.Now()
 			antsWG.Add(len(txGroupsList[i]))
 			tracer.ExecuteWithAntsCacheState(antsPool, txGroupsList[i], cacheStates, headers[i], fakeChainCtx, &antsWG)
-
+			PureExecutionCost = time.Since(start)
 			// use pond pool
 			// tracer.ExecuteWithPondCacheState(pondPool, txGroupsList[i], cacheStates, headers[i], fakeChainCtx)
-
-			elapsed = time.Since(start)
-			executeCost += elapsed
-			PureExecCost += elapsed
 
 			// fmt.Println("Longest Task Costs for Execution Costs:", timeCost)
 			// timeCost = time.Duration(0)
 
 			startMerge := time.Now()
 			utils.MergeToState(cacheStates, state)
-			elapsedMerge := time.Since(startMerge)
-			// fmt.Println("Merge Costs:", elapsedMerge)
-			executeCost += elapsedMerge
-		}
+			PureMergeCost = time.Since(startMerge)
 
-		fmt.Println("Execution Time:", executeCost)
-		fmt.Println("PureExecution Time:", PureExecCost)
+			fmt.Println("Execution Time:", time.Since(st))
+			fmt.Println("PureExecution Time:", PureExecutionCost)
+			fmt.Println("PurePrefetchInTurn Time:", PurePrefetchCost)
+			fmt.Println("PureMergeInTurn Time:", PureMergeCost)
+		}
 	}
 
 	return nil
