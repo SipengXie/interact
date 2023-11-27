@@ -474,7 +474,8 @@ func (s *CacheState) prefetchSetter(addr common.Address, hash common.Hash, state
 
 // ! we can use write set to optimize the merge process
 func (s *CacheState) MergeState(statedb *state.StateDB) {
-	for addr, aoj := range s.Accounts {
+	for addr := range s.Journal.dirties {
+		aoj := s.getAccountObject(addr)
 		statedb.SetBalance(addr, aoj.GetBalance())
 		statedb.SetNonce(addr, aoj.GetNonce())
 		statedb.SetCode(addr, aoj.Code())
@@ -485,7 +486,8 @@ func (s *CacheState) MergeState(statedb *state.StateDB) {
 }
 
 func (s *CacheState) MergeStateToCacheState(statedb *CacheState) {
-	for addr, aoj := range s.Accounts {
+	for addr := range s.Journal.dirties {
+		aoj := s.getAccountObject(addr)
 		statedb.SetBalance(addr, aoj.GetBalance())
 		statedb.SetNonce(addr, aoj.GetNonce())
 		statedb.SetCode(addr, aoj.Code())
@@ -496,7 +498,8 @@ func (s *CacheState) MergeStateToCacheState(statedb *CacheState) {
 }
 
 func (s *CacheState) MergeStateToFullCache(statedb *FullCacheConcurrent) {
-	for addr, aoj := range s.Accounts {
+	for addr := range s.Journal.dirties {
+		aoj := s.getAccountObject(addr)
 		statedb.SetBalance(addr, aoj.GetBalance())
 		statedb.SetNonce(addr, aoj.GetNonce())
 		statedb.SetCode(addr, aoj.Code())

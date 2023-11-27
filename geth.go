@@ -5,6 +5,7 @@ import (
 	"interact/accesslist"
 	cachestate "interact/cacheState"
 	"interact/core"
+	"interact/fullstate"
 	"interact/tracer"
 	"interact/utils"
 	"sync"
@@ -18,8 +19,8 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
-func ExecFromStartToEndSerial(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
-	fmt.Println("DegreeZero Solution Concurrent CacheState")
+func ExecSerial(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+	fmt.Println("SerialExecution")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
 	txs, _, headers := utils.GetTxsPredictsAndHeaders(chainDB, sdbBackend, startNum, endNum)
@@ -46,7 +47,7 @@ func ExecFromStartToEndSerial(chainDB ethdb.Database, sdbBackend statedb.Databas
 	return nil
 }
 
-func ExecFromStartToEndWithConnectedComponents(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecWithConnectedComponents(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
 	fmt.Println("Connected Components Solution")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -130,7 +131,7 @@ func ExecFromStartToEndWithConnectedComponents(chainDB ethdb.Database, sdbBacken
 	return nil
 }
 
-func ExecFromStartToEndWithDegreeZero(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecWithDegreeZero(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
 	fmt.Println("DegreeZero Solution")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -200,7 +201,7 @@ func ExecFromStartToEndWithDegreeZero(chainDB ethdb.Database, sdbBackend statedb
 	return nil
 }
 
-func ExecFromStartToEndWithMIS(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecWithMIS(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
 	fmt.Println("MIS Solution")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -268,7 +269,7 @@ func ExecFromStartToEndWithMIS(chainDB ethdb.Database, sdbBackend statedb.Databa
 	return nil
 }
 
-func ExecFromStartToEndWithConnectedComponentsConcurrentCacheState(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecWithConnectedComponentsConcurrentCacheState(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
 	fmt.Println("Connected Components Solution Concurrent CacheState")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -351,7 +352,7 @@ func ExecFromStartToEndWithConnectedComponentsConcurrentCacheState(chainDB ethdb
 	return nil
 }
 
-func ExecFromStartToEndWithDegreeZeroConcurrentCacheState(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecWithDegreeZeroConcurrentCacheState(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
 	fmt.Println("DegreeZero Solution Concurrent CacheState")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -413,7 +414,7 @@ func ExecFromStartToEndWithDegreeZeroConcurrentCacheState(chainDB ethdb.Database
 	return nil
 }
 
-func ExecFromStartToEndWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
 	fmt.Println("MIS Solution Concurrent CacheState")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -495,6 +496,74 @@ func ExecFromStartToEndWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBa
 	return nil
 }
 
+func ExecAriaOneRound(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+	fmt.Println("Aria Method")
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
+
+	txs, predictRWSets, headers := utils.GetTxsPredictsAndHeaders(chainDB, sdbBackend, startNum, endNum)
+
+	{
+		state, err := utils.GetState(chainDB, sdbBackend, startNum-1)
+		if err != nil {
+			return err
+		}
+
+		antsPool, _ := ants.NewPool(16, ants.WithPreAlloc(true))
+		defer antsPool.Release()
+		var antsWG sync.WaitGroup
+
+		for i := 0; i < len(txs); i++ {
+			st := time.Now()
+			PureExecutionCost := time.Duration(0)
+			// PurePrefetchCost := time.Duration(0)
+			// PureMergeCost := time.Duration(0)
+
+			txList := txs[i]
+			snapshots := make([]*fullstate.FullState, txList.Len())
+			for j := 0; j < len(txList); j++ {
+				// for each transaction, prefectch its predictRWSets
+				// then get its snapshot
+				cacheStates := cachestate.NewStateDB()
+				cacheStates.Prefetch(state, accesslist.RWSetList{predictRWSets[i][j]})
+				snapshots[j] = fullstate.NewFullState(cacheStates)
+			}
+			readReserve := accesslist.NewReserveSet()
+			writeReserve := accesslist.NewReserveSet()
+
+			st = time.Now()
+			errs := tracer.ExecWithSnapshotState(antsPool, txList, snapshots, headers[i], fakeChainCtx, &antsWG, readReserve, writeReserve)
+			PureExecutionCost = time.Since(st)
+
+			canCommit := 0
+			canCommitButHasError := 0
+			for tid := 0; tid < txList.Len(); tid++ {
+				if errs[tid] != nil {
+					fmt.Println(errs[tid])
+				}
+				if writeReserve.HasConflict(uint(tid), snapshots[tid].GetRWSet().WriteSet) { // WAW
+					continue
+				}
+				if !readReserve.HasConflict(uint(tid), snapshots[tid].GetRWSet().WriteSet) || !writeReserve.HasConflict(uint(tid), snapshots[tid].GetRWSet().ReadSet) {
+					if errs[tid] == nil {
+						canCommit++
+					} else {
+						canCommitButHasError++
+					}
+				}
+			}
+			fmt.Println("Can Commit:", canCommit)
+			fmt.Println("Can Commit But Has Error:", canCommitButHasError)
+			fmt.Println("Execution Time:", time.Since(st))
+			fmt.Println("PureExecution Time:", PureExecutionCost)
+			// fmt.Println("PurePrefetchInTurn Time:", PurePrefetchCost)
+			// fmt.Println("PureMergeInTurn Time:", PureMergeCost)
+		}
+
+	}
+
+	return nil
+}
+
 func main() {
 	Node, chainDB, sdbBackend := utils.GetEthDatabaseAndStateDatabase()
 	defer Node.Close()
@@ -503,17 +572,18 @@ func main() {
 	num := *rawdb.ReadHeaderNumber(chainDB, head)
 
 	// just test one block
-	ExecFromStartToEndSerial(chainDB, sdbBackend, num, num)
+	ExecSerial(chainDB, sdbBackend, num, num)
 	fmt.Println()
-	ExecFromStartToEndWithConnectedComponents(chainDB, sdbBackend, num, num)
-	fmt.Println()
-	ExecFromStartToEndWithDegreeZero(chainDB, sdbBackend, num, num)
-	fmt.Println()
-	ExecFromStartToEndWithMIS(chainDB, sdbBackend, num, num)
-	fmt.Println()
-	ExecFromStartToEndWithConnectedComponentsConcurrentCacheState(chainDB, sdbBackend, num, num)
-	fmt.Println()
-	ExecFromStartToEndWithDegreeZeroConcurrentCacheState(chainDB, sdbBackend, num, num)
-	fmt.Println()
-	ExecFromStartToEndWithMISConcurrentCacheState(chainDB, sdbBackend, num, num)
+	// ExecWithConnectedComponents(chainDB, sdbBackend, num, num)
+	// fmt.Println()
+	// ExecWithDegreeZero(chainDB, sdbBackend, num, num)
+	// fmt.Println()
+	// ExecWithMIS(chainDB, sdbBackend, num, num)
+	// fmt.Println()
+	// ExecWithConnectedComponentsConcurrentCacheState(chainDB, sdbBackend, num, num)
+	// fmt.Println()
+	// ExecWithDegreeZeroConcurrentCacheState(chainDB, sdbBackend, num, num)
+	// fmt.Println()
+	// ExecWithMISConcurrentCacheState(chainDB, sdbBackend, num, num)
+	ExecAriaOneRound(chainDB, sdbBackend, num, num)
 }

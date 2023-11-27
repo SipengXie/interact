@@ -2,8 +2,10 @@ package tracer
 
 import (
 	"fmt"
+	"interact/accesslist"
 	cachestate "interact/cacheState"
 	"interact/core"
+	"interact/fullstate"
 	"sync"
 	"time"
 
@@ -160,6 +162,31 @@ func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactio
 		}
 	}
 	wg.Wait()
+}
+
+// marking which tx may be aborted
+func ExecWithSnapshotState(pool *ants.Pool, txs types.Transactions, snapshots []*fullstate.FullState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup, readReserve, writeReserve *accesslist.ReserveSet) []error {
+	errs := make([]error, len(txs))
+	wg.Add(len(txs))
+	for i := 0; i < len(txs); i++ {
+		taskNum := i
+		evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, snapshots[taskNum], params.MainnetChainConfig, vm.Config{})
+		// Submit tasks to the ants pool
+		err := pool.Submit(func() {
+			rwSet := accesslist.NewRWSet()
+			snapshots[taskNum].SetRWSet(rwSet)
+			errs[taskNum] = executeTx(snapshots[taskNum], txs[taskNum], header, chainCtx, evm)
+			readReserve.Reserve(rwSet.ReadSet, uint(taskNum))
+			writeReserve.Reserve(rwSet.WriteSet, uint(taskNum))
+			wg.Done() // Mark the task as completed
+		})
+		if err != nil {
+			fmt.Println("Error submitting task to ants pool:", err)
+			wg.Done() // Mark the task as completed
+		}
+	}
+	wg.Wait()
+	return errs
 }
 
 // Execute with pond Pool with cacheState

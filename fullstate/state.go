@@ -7,15 +7,22 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 )
 
+type State interface {
+	vm.StateDB
+	SetBalance(common.Address, *big.Int)
+	SetTxContext(common.Hash, int)
+}
+
 type FullState struct {
-	stateDB *state.StateDB
+	stateDB State
 	rwSets  *accesslist.RWSet
 }
 
-func NewFullState(stateDB *state.StateDB) *FullState {
+func NewFullState(stateDB State) *FullState {
 	return &FullState{
 		stateDB: stateDB,
 		rwSets:  nil,
@@ -23,7 +30,7 @@ func NewFullState(stateDB *state.StateDB) *FullState {
 }
 
 // ----------------------- Getters ----------------------------
-func (fs *FullState) GetStateDB() *state.StateDB {
+func (fs *FullState) GetStateDB() State {
 	return fs.stateDB
 }
 
