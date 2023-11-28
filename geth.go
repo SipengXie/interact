@@ -3,23 +3,23 @@ package main
 import (
 	"fmt"
 	"interact/accesslist"
-	cachestate "interact/cacheState"
 	"interact/core"
-	"interact/fullstate"
+	interactState "interact/state"
 	"interact/tracer"
 	"interact/utils"
+	testfunc "interact/utils/testFunc"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/panjf2000/ants/v2"
 
-	statedb "github.com/ethereum/go-ethereum/core/state"
+	ethState "github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
-func ExecSerial(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecSerial(chainDB ethdb.Database, sdbBackend ethState.Database, startNum, endNum uint64) error {
 	fmt.Println("SerialExecution")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -47,7 +47,7 @@ func ExecSerial(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, e
 	return nil
 }
 
-func ExecWithConnectedComponents(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecWithConnectedComponents(chainDB ethdb.Database, sdbBackend ethState.Database, startNum, endNum uint64) error {
 	fmt.Println("Connected Components Solution")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -131,7 +131,7 @@ func ExecWithConnectedComponents(chainDB ethdb.Database, sdbBackend statedb.Data
 	return nil
 }
 
-func ExecWithDegreeZero(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecWithDegreeZero(chainDB ethdb.Database, sdbBackend ethState.Database, startNum, endNum uint64) error {
 	fmt.Println("DegreeZero Solution")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -152,7 +152,7 @@ func ExecWithDegreeZero(chainDB ethdb.Database, sdbBackend statedb.Database, sta
 			st := time.Now()
 			groups := utils.GenerateDegreeZeroGroups(txs[i], predictRWSets[i])
 			fmt.Println("Generate TxGroups:", time.Since(st))
-			fullcache := cachestate.NewStateDB()
+			fullcache := interactState.NewCacheState()
 			// here we don't pre warm the data
 			fullcache.Prefetch(state, predictRWSets[i])
 			st = time.Now()
@@ -164,7 +164,7 @@ func ExecWithDegreeZero(chainDB ethdb.Database, sdbBackend statedb.Database, sta
 
 				// Create groups to execute
 				txsToExec := make(types.Transactions, len(groups[round]))
-				cacheStates := make(cachestate.CacheStateList, len(groups[round]))
+				cacheStates := make(interactState.CacheStateList, len(groups[round]))
 				antsWG.Add(len(groups[round]))
 
 				for index := 0; index < len(groups[round]); index++ {
@@ -172,7 +172,7 @@ func ExecWithDegreeZero(chainDB ethdb.Database, sdbBackend statedb.Database, sta
 					// groups[round][index] is the very tx we want to add to pool
 					txid := groups[round][index]
 					tx := txs[i][txid]
-					cacheForOneTx := cachestate.NewStateDB()
+					cacheForOneTx := interactState.NewCacheState()
 					prefst := time.Now()
 					cacheForOneTx.Prefetch(fullcache, accesslist.RWSetList{predictRWSets[i][txid]})
 					PurePrefetchCost += time.Since(prefst)
@@ -185,10 +185,10 @@ func ExecWithDegreeZero(chainDB ethdb.Database, sdbBackend statedb.Database, sta
 				PureExecutionCost += time.Since(execst)
 
 				mergest := time.Now()
-				utils.MergeToCacheState(cacheStates, fullcache)
+				utils.MergeToState(cacheStates, fullcache)
 				PureMergeCost += time.Since(mergest)
 			}
-			utils.MergeToState(cachestate.CacheStateList{fullcache}, state)
+			utils.MergeToState(interactState.CacheStateList{fullcache}, state)
 
 			fmt.Println("Execution Time:", time.Since(st))
 			fmt.Println("PureExection Time:", PureExecutionCost)
@@ -201,7 +201,7 @@ func ExecWithDegreeZero(chainDB ethdb.Database, sdbBackend statedb.Database, sta
 	return nil
 }
 
-func ExecWithMIS(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecWithMIS(chainDB ethdb.Database, sdbBackend ethState.Database, startNum, endNum uint64) error {
 	fmt.Println("MIS Solution")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -222,7 +222,7 @@ func ExecWithMIS(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, 
 			st := time.Now()
 			groups := utils.GenerateMISGroups(txs[i], predictRWSets[i])
 			fmt.Println("Generate TxGroups:", time.Since(st))
-			fullcache := cachestate.NewStateDB()
+			fullcache := interactState.NewCacheState()
 
 			// here we don't pre warm the data
 			fullcache.Prefetch(state, predictRWSets[i])
@@ -235,7 +235,7 @@ func ExecWithMIS(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, 
 
 				// Create groups to execute
 				txsToExec := make(types.Transactions, len(groups[round]))
-				cacheStates := make(cachestate.CacheStateList, len(groups[round]))
+				cacheStates := make(interactState.CacheStateList, len(groups[round]))
 				antsWG.Add(len(groups[round]))
 
 				for index := 0; index < len(groups[round]); index++ {
@@ -243,7 +243,7 @@ func ExecWithMIS(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, 
 					// groups[round][index] is the very tx we want to add to pool
 					txid := groups[round][index]
 					tx := txs[i][txid]
-					cacheForOneTx := cachestate.NewStateDB()
+					cacheForOneTx := interactState.NewCacheState()
 					prefst := time.Now()
 					cacheForOneTx.Prefetch(fullcache, accesslist.RWSetList{predictRWSets[i][txid]})
 					PurePrefetchCost += time.Since(prefst)
@@ -256,10 +256,10 @@ func ExecWithMIS(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, 
 				PureExecutionCost += time.Since(execst)
 
 				mergest := time.Now()
-				utils.MergeToCacheState(cacheStates, fullcache)
+				utils.MergeToState(cacheStates, fullcache)
 				PureMergeCost += time.Since(mergest)
 			}
-			utils.MergeToState(cachestate.CacheStateList{fullcache}, state)
+			utils.MergeToState(interactState.CacheStateList{fullcache}, state)
 			fmt.Println("Execution Time:", time.Since(st))
 			fmt.Println("PureExection Time:", PureExecutionCost)
 			fmt.Println("PurePrefetchInTurn Time:", PurePrefetchCost)
@@ -269,7 +269,7 @@ func ExecWithMIS(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, 
 	return nil
 }
 
-func ExecWithConnectedComponentsConcurrentCacheState(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecWithConnectedComponentsConcurrentCacheState(chainDB ethdb.Database, sdbBackend ethState.Database, startNum, endNum uint64) error {
 	fmt.Println("Connected Components Solution Concurrent CacheState")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -309,7 +309,7 @@ func ExecWithConnectedComponentsConcurrentCacheState(chainDB ethdb.Database, sdb
 		// !!! Our Prefetch is less efficient than StateDB.Prefetch !!!
 
 		for i := 0; i < len(txs); i++ {
-			fullcache := cachestate.NewFullCacheConcurrent()
+			fullcache := interactState.NewFullCacheConcurrent()
 			// here we don't pre warm the data
 			fullcache.Prefetch(state, predictRWSets[i])
 
@@ -352,7 +352,7 @@ func ExecWithConnectedComponentsConcurrentCacheState(chainDB ethdb.Database, sdb
 	return nil
 }
 
-func ExecWithDegreeZeroConcurrentCacheState(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecWithDegreeZeroConcurrentCacheState(chainDB ethdb.Database, sdbBackend ethState.Database, startNum, endNum uint64) error {
 	fmt.Println("DegreeZero Solution Concurrent CacheState")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -373,7 +373,7 @@ func ExecWithDegreeZeroConcurrentCacheState(chainDB ethdb.Database, sdbBackend s
 			st := time.Now()
 			groups := utils.GenerateDegreeZeroGroups(txs[i], predictRWSets[i])
 			fmt.Println("Generate TxGroups:", time.Since(st))
-			fullcache := cachestate.NewFullCacheConcurrent()
+			fullcache := interactState.NewFullCacheConcurrent()
 			// here we don't pre warm the data
 			fullcache.Prefetch(state, predictRWSets[i])
 			st = time.Now()
@@ -401,7 +401,7 @@ func ExecWithDegreeZeroConcurrentCacheState(chainDB ethdb.Database, sdbBackend s
 			}
 			// Ignore merge to state as we use fullcache to represent statedb
 			// and another reason is that the Range of sync.Map is hard to use.
-			// utils.MergeToState(cachestate.CacheStateList{fullcache}, state)
+			// utils.MergeToState(interactState.CacheStateList{fullcache}, state)
 
 			fmt.Println("Execution Time:", time.Since(st))
 			fmt.Println("PureExecution Time:", PureExecutionCost)
@@ -414,31 +414,11 @@ func ExecWithDegreeZeroConcurrentCacheState(chainDB ethdb.Database, sdbBackend s
 	return nil
 }
 
-func ExecWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBackend ethState.Database, startNum, endNum uint64) error {
 	fmt.Println("MIS Solution Concurrent CacheState")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
 	txs, predictRWSets, headers := utils.GetTxsPredictsAndHeaders(chainDB, sdbBackend, startNum, endNum)
-
-	{
-		// get statedb from block[startNum-1].Root
-		state, err := utils.GetState(chainDB, sdbBackend, startNum-1)
-		if err != nil {
-			return err
-		}
-		state.StartPrefetcher("miner")
-		defer state.StopPrefetcher()
-
-		// set the satrt time
-		start := time.Now()
-		// test the serial execution
-		for i := 0; i < len(txs); i++ {
-			tracer.ExecuteTxs(state, txs[i], headers[i], fakeChainCtx)
-		}
-		// cal the execution time
-		elapsed := time.Since(start)
-		fmt.Println("Serial Execution Time:", elapsed)
-	}
 
 	{
 		state, err := utils.GetState(chainDB, sdbBackend, startNum-1)
@@ -455,7 +435,7 @@ func ExecWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBackend statedb.
 			st := time.Now()
 			groups := utils.GenerateMISGroups(txs[i], predictRWSets[i])
 			fmt.Println("Generate TxGroups:", time.Since(st))
-			fullcache := cachestate.NewFullCacheConcurrent()
+			fullcache := interactState.NewFullCacheConcurrent()
 			// here we don't pre warm the data
 			fullcache.Prefetch(state, predictRWSets[i])
 			st = time.Now()
@@ -483,7 +463,7 @@ func ExecWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBackend statedb.
 			}
 			// Ignore merge to state as we use fullcache to represent statedb
 			// and another reason is that the Range of sync.Map is hard to use.
-			// utils.MergeToState(cachestate.CacheStateList{fullcache}, state)
+			// utils.MergeToState(interactState.CacheStateList{fullcache}, state)
 
 			fmt.Println("Execution Time:", time.Since(st))
 			fmt.Println("PureExecution Time:", PureExecutionCost)
@@ -496,7 +476,7 @@ func ExecWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBackend statedb.
 	return nil
 }
 
-func ExecAriaOneRound(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) error {
+func ExecAriaMultiRoundWithConcurrentState(chainDB ethdb.Database, sdbBackend ethState.Database, startNum, endNum uint64) error {
 	fmt.Println("Aria Method")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 
@@ -512,51 +492,89 @@ func ExecAriaOneRound(chainDB ethdb.Database, sdbBackend statedb.Database, start
 		defer antsPool.Release()
 		var antsWG sync.WaitGroup
 
+		// for i'th block
 		for i := 0; i < len(txs); i++ {
-			st := time.Now()
 			PureExecutionCost := time.Duration(0)
-			// PurePrefetchCost := time.Duration(0)
-			// PureMergeCost := time.Duration(0)
+			PurePrefetchCost := time.Duration(0)
+			PureMergeCost := time.Duration(0)
 
 			txList := txs[i]
-			snapshots := make([]*fullstate.FullState, txList.Len())
+			txListIndex := make([]int, len(txList)) // global index for identify the tx, predictList and trueList
 			for j := 0; j < len(txList); j++ {
-				// for each transaction, prefectch its predictRWSets
-				// then get its snapshot
-				cacheStates := cachestate.NewStateDB()
-				cacheStates.Prefetch(state, accesslist.RWSetList{predictRWSets[i][j]})
-				snapshots[j] = fullstate.NewFullState(cacheStates)
+				txListIndex[j] = j
 			}
-			readReserve := accesslist.NewReserveSet()
-			writeReserve := accesslist.NewReserveSet()
 
-			st = time.Now()
-			errs := tracer.ExecWithSnapshotState(antsPool, txList, snapshots, headers[i], fakeChainCtx, &antsWG, readReserve, writeReserve)
-			PureExecutionCost = time.Since(st)
+			// make a fullcache containing both predictList and trueList
+			trueRWlists, _ := testfunc.TrueRWSets(txList, chainDB, sdbBackend, startNum+uint64(i))
+			fullcache := interactState.NewFullCacheConcurrent()
+			fullcache.Prefetch(state, trueRWlists)
+			fullcache.Prefetch(state, predictRWSets[i])
 
-			canCommit := 0
-			canCommitButHasError := 0
-			for tid := 0; tid < txList.Len(); tid++ {
-				if errs[tid] != nil {
-					fmt.Println(errs[tid])
+			for {
+
+				rwSetList := make([]accesslist.RWSetList, txList.Len())
+				for j := 0; j < txList.Len(); j++ {
+					rwSetList[j] = accesslist.RWSetList{predictRWSets[i][txListIndex[j]], trueRWlists[txListIndex[j]]}
 				}
-				if writeReserve.HasConflict(uint(tid), snapshots[tid].GetRWSet().WriteSet) { // WAW
-					continue
+				prefetchSt := time.Now()
+				antsWG.Add(txList.Len())
+				cacheStates := utils.GenerateCacheStatesConcurrent(antsPool, fullcache, rwSetList, &antsWG)
+				PurePrefetchCost = PurePrefetchCost + time.Since(prefetchSt)
+
+				snapshots := make([]*interactState.FullState, txList.Len())
+				for j := 0; j < txList.Len(); j++ {
+					snapshots[j] = interactState.NewFullState(cacheStates[j])
 				}
-				if !readReserve.HasConflict(uint(tid), snapshots[tid].GetRWSet().WriteSet) || !writeReserve.HasConflict(uint(tid), snapshots[tid].GetRWSet().ReadSet) {
-					if errs[tid] == nil {
-						canCommit++
-					} else {
-						canCommitButHasError++
+
+				readReserve := accesslist.NewReserveSet()
+				writeReserve := accesslist.NewReserveSet()
+
+				execSt := time.Now()
+				errs := tracer.ExecWithSnapshotState(antsPool, txList, snapshots, headers[i], fakeChainCtx, &antsWG, readReserve, writeReserve)
+				PureExecutionCost = PureExecutionCost + time.Since(execSt)
+
+				canCommit := make([]int, 0)       // contains j in local
+				nextTxlistIndex := make([]int, 0) // contains index in global
+				nextTxlist := make(types.Transactions, 0)
+
+				for j := 0; j < txList.Len(); j++ {
+					if errs[j] != nil {
+						fmt.Println(errs[j])
+					}
+					if writeReserve.HasConflict(uint(j), snapshots[j].GetRWSet().WriteSet) { // WAW
+						nextTxlistIndex = append(nextTxlistIndex, txListIndex[j])
+						nextTxlist = append(nextTxlist, txList[j])
+						continue
+					}
+					if !readReserve.HasConflict(uint(j), snapshots[j].GetRWSet().WriteSet) || !writeReserve.HasConflict(uint(j), snapshots[j].GetRWSet().ReadSet) {
+						if errs[j] == nil {
+							canCommit = append(canCommit, j)
+						} else {
+							nextTxlistIndex = append(nextTxlistIndex, txListIndex[j])
+							nextTxlist = append(nextTxlist, txList[j])
+						}
 					}
 				}
+
+				commitCacheStates := make(interactState.CacheStateList, len(canCommit))
+				for k, j := range canCommit {
+					commitCacheStates[k] = snapshots[j].GetStateDB().(*interactState.CacheState)
+				}
+
+				mergeSt := time.Now()
+				antsWG.Add(len(canCommit))
+				utils.MergeToCacheStateConcurrent(antsPool, commitCacheStates, fullcache, &antsWG)
+				PureMergeCost = PureMergeCost + time.Since(mergeSt)
+
+				txList = nextTxlist
+				txListIndex = nextTxlistIndex
+				if len(txList) == 0 {
+					break
+				}
 			}
-			fmt.Println("Can Commit:", canCommit)
-			fmt.Println("Can Commit But Has Error:", canCommitButHasError)
-			fmt.Println("Execution Time:", time.Since(st))
 			fmt.Println("PureExecution Time:", PureExecutionCost)
-			// fmt.Println("PurePrefetchInTurn Time:", PurePrefetchCost)
-			// fmt.Println("PureMergeInTurn Time:", PureMergeCost)
+			fmt.Println("PurePrefetchInTurn Time:", PurePrefetchCost)
+			fmt.Println("PureMergeInTurn Time:", PureMergeCost)
 		}
 
 	}
@@ -585,5 +603,5 @@ func main() {
 	// ExecWithDegreeZeroConcurrentCacheState(chainDB, sdbBackend, num, num)
 	// fmt.Println()
 	// ExecWithMISConcurrentCacheState(chainDB, sdbBackend, num, num)
-	ExecAriaOneRound(chainDB, sdbBackend, num, num)
+	ExecAriaMultiRoundWithConcurrentState(chainDB, sdbBackend, num, num)
 }

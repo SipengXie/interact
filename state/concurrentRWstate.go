@@ -1,4 +1,4 @@
-package cachestate
+package state
 
 import (
 	"interact/accesslist"
@@ -29,6 +29,15 @@ func NewFullCacheConcurrent() *FullCacheConcurrent {
 		prefectched: make(accesslist.ALTuple),
 		Logs:        make(map[common.Hash][]*types.Log),
 	}
+}
+
+func (s *FullCacheConcurrent) Copy() *FullCacheConcurrent {
+	newS := NewFullCacheConcurrent()
+	s.Accounts.Range(func(key any, value any) bool {
+		newS.Accounts.Store(key, value)
+		return true
+	})
+	return newS
 }
 
 func (s *FullCacheConcurrent) getAccountObject(addr common.Address) *accountObjectConcurrent {

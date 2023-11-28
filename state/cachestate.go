@@ -1,4 +1,4 @@
-package cachestate
+package state
 
 import (
 	"fmt"
@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -52,7 +51,7 @@ type CacheState struct {
 
 type CacheStateList []*CacheState
 
-func NewStateDB() *CacheState {
+func NewCacheState() *CacheState {
 	return &CacheState{
 		Accounts:    make(map[common.Address]*accountObject),
 		Journal:     newJournal(),
@@ -473,31 +472,7 @@ func (s *CacheState) prefetchSetter(addr common.Address, hash common.Hash, state
 }
 
 // ! we can use write set to optimize the merge process
-func (s *CacheState) MergeState(statedb *state.StateDB) {
-	for addr := range s.Journal.dirties {
-		aoj := s.getAccountObject(addr)
-		statedb.SetBalance(addr, aoj.GetBalance())
-		statedb.SetNonce(addr, aoj.GetNonce())
-		statedb.SetCode(addr, aoj.Code())
-		for slot, value := range aoj.CacheStorage {
-			statedb.SetState(addr, slot, value)
-		}
-	}
-}
-
-func (s *CacheState) MergeStateToCacheState(statedb *CacheState) {
-	for addr := range s.Journal.dirties {
-		aoj := s.getAccountObject(addr)
-		statedb.SetBalance(addr, aoj.GetBalance())
-		statedb.SetNonce(addr, aoj.GetNonce())
-		statedb.SetCode(addr, aoj.Code())
-		for slot, value := range aoj.CacheStorage {
-			statedb.SetState(addr, slot, value)
-		}
-	}
-}
-
-func (s *CacheState) MergeStateToFullCache(statedb *FullCacheConcurrent) {
+func (s *CacheState) MergeState(statedb State) {
 	for addr := range s.Journal.dirties {
 		aoj := s.getAccountObject(addr)
 		statedb.SetBalance(addr, aoj.GetBalance())

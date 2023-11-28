@@ -3,19 +3,19 @@ package testfunc
 import (
 	"fmt"
 	"interact/core"
-	"interact/fullstate"
+	interactState "interact/state"
 	"interact/tracer"
 	"interact/utils"
 	"math/rand"
 	"os"
 	"time"
 
-	statedb "github.com/ethereum/go-ethereum/core/state"
+	ethState "github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/ethdb"
 )
 
 // CompareTracerAndFulldb compare two manners to predict rw al sets
-func CompareTracerAndFulldb(chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) {
+func CompareTracerAndFulldb(chainDB ethdb.Database, sdbBackend ethState.Database, num uint64) {
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
 	baseState, _ := utils.GetState(chainDB, sdbBackend, num-1)
 	block, header := utils.GetBlockAndHeader(chainDB, num)
@@ -27,7 +27,7 @@ func CompareTracerAndFulldb(chainDB ethdb.Database, sdbBackend statedb.Database,
 	fmt.Println("Tx Hash:", tx.Hash().Hex())
 	tracerPredict, _ := tracer.PredictWithTracer(baseState.Copy(), tx, header, fakeChainCtx)
 
-	fulldb := fullstate.NewFullState(baseState.Copy())
+	fulldb := interactState.NewFullState(baseState.Copy())
 	fullStatePredict, _ := tracer.ExecToGenerateRWSet(fulldb, tx, header, fakeChainCtx)
 
 	jsonfile, _ := os.Create("tracer.json")

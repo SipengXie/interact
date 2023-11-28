@@ -3,15 +3,13 @@ package tracer
 import (
 	"fmt"
 	"interact/accesslist"
-	cachestate "interact/cacheState"
 	"interact/core"
-	"interact/fullstate"
+	"interact/state"
 	"sync"
 	"time"
 
 	"github.com/alitto/pond"
 	"github.com/devchat-ai/gopool"
-	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
@@ -39,9 +37,9 @@ func executeTx(statedb vm.StateDB, tx *types.Transaction, header *types.Header, 
 	}
 
 	switch statedb.(type) {
-	case *cachestate.CacheState:
-		if !statedb.(*cachestate.CacheState).StateJudge {
-			statedb.(*cachestate.CacheState).StateJudge = true
+	case *state.CacheState:
+		if !statedb.(*state.CacheState).StateJudge {
+			statedb.(*state.CacheState).StateJudge = true
 			// This error means the prediction is false, and the transaction should be reverted
 			statedb.RevertToSnapshot(snapshot)
 			return ErrFalsePredict
@@ -65,7 +63,7 @@ func ExecuteTxs(sdb vm.StateDB, txs []*types.Transaction, header *types.Header, 
 }
 
 // Execute with GoPool with cacheState
-func ExecuteWithGopoolCacheState(pool gopool.GoPool, txsGroups []types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext) {
+func ExecuteWithGopoolCacheState(pool gopool.GoPool, txsGroups []types.Transactions, CacheStates []*state.CacheState, header *types.Header, chainCtx core.ChainContext) {
 	// Add tasks to the pool
 	// !!! Gopool will costs 50ms to do the scheduling !!!
 	// st := time.Now()
@@ -82,31 +80,15 @@ func ExecuteWithGopoolCacheState(pool gopool.GoPool, txsGroups []types.Transacti
 	// fmt.Println("Execute Costs:", time.Since(st))
 }
 
-// Execute with GoPool with StatetDB
-func ExecuteWithGopoolStateDB(pool gopool.GoPool, txsGroups []types.Transactions, statedb []*state.StateDB, header *types.Header, chainCtx core.ChainContext) {
-	// Initialize a GoPool
-	// Add tasks to the pool
-	// !!! Gopool will costs 50ms to do the scheduling !!!
-	for j := 0; j < len(txsGroups); j++ {
-		taskNum := j
-		pool.AddTask(func() (interface{}, error) {
-			st := time.Now()
-			ExecuteTxs(statedb[taskNum], txsGroups[taskNum], header, chainCtx)
-			return time.Since(st), nil
-		})
-	}
-	pool.Wait()
-}
-
 type ParameterForTxGroup struct {
 	TxsGroup   types.Transactions
-	CacheState *cachestate.CacheState
+	CacheState *state.CacheState
 	Header     *types.Header
 	ChainCtx   core.ChainContext
 }
 
 // Execute with ants FuncPool with cacheState
-func ExecuteWithAntsCacheState(pool *ants.PoolWithFunc, txsGroups []types.Transactions, CacheStates cachestate.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
+func ExecuteWithAntsCacheState(pool *ants.PoolWithFunc, txsGroups []types.Transactions, CacheStates state.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
 
 	for j := 0; j < len(txsGroups); j++ {
 		taskNum := j
@@ -128,7 +110,7 @@ func ExecuteWithAntsCacheState(pool *ants.PoolWithFunc, txsGroups []types.Transa
 }
 
 // Execute with ants Pool with cacheState
-func ExecuteWithAntsPool(pool *ants.Pool, txsGroups []types.Transactions, CacheStates cachestate.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
+func ExecuteWithAntsPool(pool *ants.Pool, txsGroups []types.Transactions, CacheStates state.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
 
 	for j := 0; j < len(txsGroups); j++ {
 		taskNum := j
@@ -146,7 +128,7 @@ func ExecuteWithAntsPool(pool *ants.Pool, txsGroups []types.Transactions, CacheS
 }
 
 // Concurrently execute single transaction, rather than transaction groups
-func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
+func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactions, CacheStates []*state.CacheState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
 
 	for i := 0; i < len(txs); i++ {
 		taskNum := i
@@ -165,7 +147,7 @@ func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactio
 }
 
 // marking which tx may be aborted
-func ExecWithSnapshotState(pool *ants.Pool, txs types.Transactions, snapshots []*fullstate.FullState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup, readReserve, writeReserve *accesslist.ReserveSet) []error {
+func ExecWithSnapshotState(pool *ants.Pool, txs types.Transactions, snapshots []*state.FullState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup, readReserve, writeReserve *accesslist.ReserveSet) []error {
 	errs := make([]error, len(txs))
 	wg.Add(len(txs))
 	for i := 0; i < len(txs); i++ {
@@ -190,7 +172,7 @@ func ExecWithSnapshotState(pool *ants.Pool, txs types.Transactions, snapshots []
 }
 
 // Execute with pond Pool with cacheState
-func ExecuteWithPondCacheState(pool *pond.WorkerPool, txsGroups []types.Transactions, CacheStates []*cachestate.CacheState, header *types.Header, chainCtx core.ChainContext) {
+func ExecuteWithPondCacheState(pool *pond.WorkerPool, txsGroups []types.Transactions, CacheStates []*state.CacheState, header *types.Header, chainCtx core.ChainContext) {
 	// Iterate over the txsGroups
 	for j := 0; j < len(txsGroups); j++ {
 		taskNum := j

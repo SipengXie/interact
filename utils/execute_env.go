@@ -3,16 +3,15 @@ package utils
 import (
 	"fmt"
 	"interact/accesslist"
-	cachestate "interact/cacheState"
 	conflictgraph "interact/conflictGraph"
 	"interact/core"
-	"interact/fullstate"
+	interactState "interact/state"
 	"interact/tracer"
 	"sort"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/core/rawdb"
-	statedb "github.com/ethereum/go-ethereum/core/state"
+	ethState "github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -20,16 +19,16 @@ import (
 )
 
 // PredictRWSets predict a tx rwsets in a block with accesslist
-func PredictRWSets(tx *types.Transaction, chainDB ethdb.Database, sdbBackend statedb.Database, num uint64) *accesslist.RWSet {
+func PredictRWSets(tx *types.Transaction, chainDB ethdb.Database, sdbBackend ethState.Database, num uint64) *accesslist.RWSet {
 
 	baseHeadHash := rawdb.ReadCanonicalHash(chainDB, num-1)
 	baseHeader := rawdb.ReadHeader(chainDB, baseHeadHash, num-1)
 
-	state, err := statedb.New(baseHeader.Root, sdbBackend, nil)
+	state, err := ethState.New(baseHeader.Root, sdbBackend, nil)
 	if err != nil {
 		panic(err)
 	}
-	fulldb := fullstate.NewFullState(state)
+	fulldb := interactState.NewFullState(state)
 
 	headHash := rawdb.ReadCanonicalHash(chainDB, num)
 	header := rawdb.ReadHeader(chainDB, headHash, num)
@@ -68,7 +67,7 @@ func generateVertexGroups(txs types.Transactions, predictRWSets []*accesslist.RW
 	return groups
 }
 
-func GetTxsPredictsAndHeaders(chainDB ethdb.Database, sdbBackend statedb.Database, startNum, endNum uint64) ([]types.Transactions, []accesslist.RWSetList, []*types.Header) {
+func GetTxsPredictsAndHeaders(chainDB ethdb.Database, sdbBackend ethState.Database, startNum, endNum uint64) ([]types.Transactions, []accesslist.RWSetList, []*types.Header) {
 	// Try to expand transaction lists
 	txs := make([]types.Transactions, endNum-startNum+1)
 	predictRWSets := make([]accesslist.RWSetList, endNum-startNum+1)
@@ -144,21 +143,21 @@ func GenerateDegreeZeroGroups(txs types.Transactions, predictRWSets []*accesslis
 	return graph.GetDegreeZero()
 }
 
-func GenerateCacheStates(db vm.StateDB, RWSetsGroups []accesslist.RWSetList) cachestate.CacheStateList {
+func GenerateCacheStates(db vm.StateDB, RWSetsGroups []accesslist.RWSetList) interactState.CacheStateList {
 	// cannot concurrent prefetch due to the statedb is not thread safe
-	cacheStates := make([]*cachestate.CacheState, len(RWSetsGroups))
+	cacheStates := make([]*interactState.CacheState, len(RWSetsGroups))
 	for i := 0; i < len(RWSetsGroups); i++ {
 		if RWSetsGroups[i] == nil {
 			continue
 		}
-		cacheStates[i] = cachestate.NewStateDB()
+		cacheStates[i] = interactState.NewCacheState()
 		cacheStates[i].Prefetch(db, RWSetsGroups[i])
 	}
 	return cacheStates
 }
 
-func GenerateCacheStatesConcurrent(pool *ants.Pool, db vm.StateDB, RWSetsGroups []accesslist.RWSetList, wg *sync.WaitGroup) cachestate.CacheStateList {
-	cacheStates := make([]*cachestate.CacheState, len(RWSetsGroups))
+func GenerateCacheStatesConcurrent(pool *ants.Pool, db vm.StateDB, RWSetsGroups []accesslist.RWSetList, wg *sync.WaitGroup) interactState.CacheStateList {
+	cacheStates := make([]*interactState.CacheState, len(RWSetsGroups))
 	for i := 0; i < len(RWSetsGroups); i++ {
 		if RWSetsGroups[i] == nil {
 			wg.Done()
@@ -166,7 +165,7 @@ func GenerateCacheStatesConcurrent(pool *ants.Pool, db vm.StateDB, RWSetsGroups 
 		}
 		index := i
 		err := pool.Submit(func() {
-			cacheStates[index] = cachestate.NewStateDB()
+			cacheStates[index] = interactState.NewCacheState()
 			cacheStates[index].Prefetch(db, RWSetsGroups[index])
 			wg.Done()
 		})
@@ -179,9 +178,9 @@ func GenerateCacheStatesConcurrent(pool *ants.Pool, db vm.StateDB, RWSetsGroups 
 	return cacheStates
 }
 
-func GenerateTxsAndCacheStatesWithAnts(pool *ants.Pool, db *cachestate.FullCacheConcurrent, group []uint, txs types.Transactions, predictList accesslist.RWSetList, wg *sync.WaitGroup) (types.Transactions, cachestate.CacheStateList) {
+func GenerateTxsAndCacheStatesWithAnts(pool *ants.Pool, db *interactState.FullCacheConcurrent, group []uint, txs types.Transactions, predictList accesslist.RWSetList, wg *sync.WaitGroup) (types.Transactions, interactState.CacheStateList) {
 	txsToExec := make(types.Transactions, len(group))
-	cacheStates := make([]*cachestate.CacheState, len(group))
+	cacheStates := make([]*interactState.CacheState, len(group))
 	for i := 0; i < len(group); i++ {
 		index := i
 		txid := group[index]
@@ -189,7 +188,7 @@ func GenerateTxsAndCacheStatesWithAnts(pool *ants.Pool, db *cachestate.FullCache
 		txsToExec[index] = tx
 
 		err := pool.Submit(func() {
-			cacheStates[index] = cachestate.NewStateDB()
+			cacheStates[index] = interactState.NewCacheState()
 			cacheStates[index].Prefetch(db, accesslist.RWSetList{predictList[txid]})
 			wg.Done() // Mark the task as completed
 		})

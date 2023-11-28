@@ -1,4 +1,4 @@
-package fullstate
+package state
 
 import (
 	"interact/accesslist"
@@ -7,15 +7,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 )
-
-type State interface {
-	vm.StateDB
-	SetBalance(common.Address, *big.Int)
-	SetTxContext(common.Hash, int)
-}
 
 type FullState struct {
 	stateDB State

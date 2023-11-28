@@ -4,7 +4,7 @@ import (
 	"errors"
 	"interact/accesslist"
 	"interact/core"
-	"interact/fullstate"
+	"interact/state"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -80,7 +80,7 @@ func PredictWithTracer(statedb vm.StateDB, tx *types.Transaction, header *types.
 }
 
 // -------------------------------------------------------
-func ExecToGenerateRWSet(fulldb *fullstate.FullState, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RWSet, error) {
+func ExecToGenerateRWSet(fulldb *state.FullState, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RWSet, error) {
 	rwSet := accesslist.NewRWSet()
 	fulldb.SetRWSet(rwSet)
 	evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, fulldb, params.MainnetChainConfig, vm.Config{})
@@ -91,7 +91,7 @@ func ExecToGenerateRWSet(fulldb *fullstate.FullState, tx *types.Transaction, hea
 	return rwSet, nil
 }
 
-func CreateRWSetsWithTransactions(db *fullstate.FullState, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RWSet, []error) {
+func CreateRWSetsWithTransactions(db *state.FullState, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RWSet, []error) {
 	ret := make([]*accesslist.RWSet, len(txs))
 	err := make([]error, len(txs))
 	for i, tx := range txs {

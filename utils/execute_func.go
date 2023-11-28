@@ -2,32 +2,25 @@ package utils
 
 import (
 	"fmt"
-	cachestate "interact/cacheState"
+	"interact/state"
 	"sync"
 
-	statedb "github.com/ethereum/go-ethereum/core/state"
 	"github.com/panjf2000/ants/v2"
 )
 
-// MergeToState merge all cacheStateDB to origin stateDB
-func MergeToState(cacheStates cachestate.CacheStateList, db *statedb.StateDB) {
+// MergeToState merge all cacheState to fullstate.State
+func MergeToState(cacheStates state.CacheStateList, db state.State) {
 	for i := 0; i < len(cacheStates); i++ {
 		cacheStates[i].MergeState(db)
 	}
 }
 
-// MergeToState merge all cacheStateDB to origin stateDB
-func MergeToCacheState(cacheStates cachestate.CacheStateList, db *cachestate.CacheState) {
-	for i := 0; i < len(cacheStates); i++ {
-		cacheStates[i].MergeStateToCacheState(db)
-	}
-}
-
-func MergeToCacheStateConcurrent(pool *ants.Pool, cacheStates cachestate.CacheStateList, db *cachestate.FullCacheConcurrent, wg *sync.WaitGroup) {
+// MergeToStateConcurrent merge all cacheState to origin FullCacheConcurrent concurrently
+func MergeToCacheStateConcurrent(pool *ants.Pool, cacheStates state.CacheStateList, db *state.FullCacheConcurrent, wg *sync.WaitGroup) {
 	for i := 0; i < len(cacheStates); i++ {
 		index := i
 		err := pool.Submit(func() {
-			cacheStates[index].MergeStateToFullCache(db)
+			cacheStates[index].MergeState(db)
 			wg.Done() // Mark the task as completed
 		})
 		if err != nil {
