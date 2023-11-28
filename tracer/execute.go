@@ -90,6 +90,7 @@ type ParameterForTxGroup struct {
 // Execute with ants FuncPool with cacheState
 func ExecuteWithAntsCacheState(pool *ants.PoolWithFunc, txsGroups []types.Transactions, CacheStates state.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
 
+	wg.Add(len(txsGroups))
 	for j := 0; j < len(txsGroups); j++ {
 		taskNum := j
 		// Submit tasks to the ants pool
@@ -111,7 +112,7 @@ func ExecuteWithAntsCacheState(pool *ants.PoolWithFunc, txsGroups []types.Transa
 
 // Execute with ants Pool with cacheState
 func ExecuteWithAntsPool(pool *ants.Pool, txsGroups []types.Transactions, CacheStates state.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
-
+	wg.Add(len(txsGroups))
 	for j := 0; j < len(txsGroups); j++ {
 		taskNum := j
 		err := pool.Submit(func() {
@@ -129,7 +130,7 @@ func ExecuteWithAntsPool(pool *ants.Pool, txsGroups []types.Transactions, CacheS
 
 // Concurrently execute single transaction, rather than transaction groups
 func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactions, CacheStates []*state.CacheState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
-
+	wg.Add(len(txs))
 	for i := 0; i < len(txs); i++ {
 		taskNum := i
 		evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, CacheStates[taskNum], params.MainnetChainConfig, vm.Config{})
@@ -146,20 +147,22 @@ func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactio
 	wg.Wait()
 }
 
-// marking which tx may be aborted
-func ExecWithSnapshotState(pool *ants.Pool, txs types.Transactions, snapshots []*state.FullState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup, readReserve, writeReserve *accesslist.ReserveSet) []error {
-	errs := make([]error, len(txs))
-	wg.Add(len(txs))
-	for i := 0; i < len(txs); i++ {
+// txs is the whole transactions of a block
+// txsIndex speicifies the index of transactions to be executed
+func ExecWithSnapshotState(pool *ants.Pool, txs types.Transactions, txsIndex []int, snapshots []*state.FullState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup, readReserve, writeReserve *accesslist.ReserveSet) []error {
+	errs := make([]error, len(txsIndex))
+	wg.Add(len(txsIndex))
+	for i := 0; i < len(txsIndex); i++ {
 		taskNum := i
 		evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, snapshots[taskNum], params.MainnetChainConfig, vm.Config{})
 		// Submit tasks to the ants pool
 		err := pool.Submit(func() {
 			rwSet := accesslist.NewRWSet()
 			snapshots[taskNum].SetRWSet(rwSet)
-			errs[taskNum] = executeTx(snapshots[taskNum], txs[taskNum], header, chainCtx, evm)
-			readReserve.Reserve(rwSet.ReadSet, uint(taskNum))
-			writeReserve.Reserve(rwSet.WriteSet, uint(taskNum))
+			index := txsIndex[taskNum]
+			errs[taskNum] = executeTx(snapshots[taskNum], txs[index], header, chainCtx, evm)
+			readReserve.Reserve(rwSet.ReadSet, uint(txsIndex[taskNum]))
+			writeReserve.Reserve(rwSet.WriteSet, uint(txsIndex[taskNum]))
 			wg.Done() // Mark the task as completed
 		})
 		if err != nil {

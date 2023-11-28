@@ -17,6 +17,7 @@ func MergeToState(cacheStates state.CacheStateList, db state.State) {
 
 // MergeToStateConcurrent merge all cacheState to origin FullCacheConcurrent concurrently
 func MergeToCacheStateConcurrent(pool *ants.Pool, cacheStates state.CacheStateList, db *state.FullCacheConcurrent, wg *sync.WaitGroup) {
+	wg.Add(len(cacheStates))
 	for i := 0; i < len(cacheStates); i++ {
 		index := i
 		err := pool.Submit(func() {

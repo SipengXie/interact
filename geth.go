@@ -108,7 +108,6 @@ func ExecWithConnectedComponents(chainDB ethdb.Database, sdbBackend ethState.Dat
 
 			// use ants pool
 			start = time.Now()
-			antsWG.Add(len(txGroupsList[i]))
 			tracer.ExecuteWithAntsCacheState(antsPool, txGroupsList[i], cacheStates, headers[i], fakeChainCtx, &antsWG)
 			PureExecutionCost = time.Since(start)
 			// use pond pool
@@ -165,7 +164,6 @@ func ExecWithDegreeZero(chainDB ethdb.Database, sdbBackend ethState.Database, st
 				// Create groups to execute
 				txsToExec := make(types.Transactions, len(groups[round]))
 				cacheStates := make(interactState.CacheStateList, len(groups[round]))
-				antsWG.Add(len(groups[round]))
 
 				for index := 0; index < len(groups[round]); index++ {
 					// only prefectch for one transaction
@@ -236,7 +234,6 @@ func ExecWithMIS(chainDB ethdb.Database, sdbBackend ethState.Database, startNum,
 				// Create groups to execute
 				txsToExec := make(types.Transactions, len(groups[round]))
 				cacheStates := make(interactState.CacheStateList, len(groups[round]))
-				antsWG.Add(len(groups[round]))
 
 				for index := 0; index < len(groups[round]); index++ {
 					// only prefectch for one transaction
@@ -319,7 +316,6 @@ func ExecWithConnectedComponentsConcurrentCacheState(chainDB ethdb.Database, sdb
 			PureMergeCost := time.Duration(0)
 
 			startPrefetch := time.Now()
-			antsWG.Add(len(RWSetGroupsList[i]))
 			cacheStates := utils.GenerateCacheStatesConcurrent(antsPool, fullcache, RWSetGroupsList[i], &antsWG)
 			PurePrefetchCost = time.Since(startPrefetch)
 
@@ -330,7 +326,6 @@ func ExecWithConnectedComponentsConcurrentCacheState(chainDB ethdb.Database, sdb
 
 			// use ants pool
 			start = time.Now()
-			antsWG.Add(len(txGroupsList[i]))
 			tracer.ExecuteWithAntsPool(antsPool, txGroupsList[i], cacheStates, headers[i], fakeChainCtx, &antsWG)
 			PureExecutionCost = time.Since(start)
 
@@ -338,7 +333,6 @@ func ExecWithConnectedComponentsConcurrentCacheState(chainDB ethdb.Database, sdb
 			// tracer.ExecuteWithPondCacheState(pondPool, txGroupsList[i], cacheStates, headers[i], fakeChainCtx)
 
 			startMerge := time.Now()
-			antsWG.Add(len(cacheStates))
 			utils.MergeToCacheStateConcurrent(antsPool, cacheStates, fullcache, &antsWG)
 			PureMergeCost = time.Since(startMerge)
 
@@ -382,19 +376,17 @@ func ExecWithDegreeZeroConcurrentCacheState(chainDB ethdb.Database, sdbBackend e
 			PureMergeCost := time.Duration(0)
 			for round := 0; round < len(groups); round++ {
 				// here we can add logic if len(groups[round]) if less than a threshold
-
+				fmt.Println("parallel exec and commit:", len(groups[round]))
 				// Create groups to execute
-				antsWG.Add(len(groups[round]))
 				prefst := time.Now()
 				txsToExec, cacheStates := utils.GenerateTxsAndCacheStatesWithAnts(antsPool, fullcache, groups[round], txs[i], predictRWSets[i], &antsWG)
 				PurePrefetchCost += time.Since(prefst)
 
-				antsWG.Add(len(groups[round]))
 				execst := time.Now()
 				tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, headers[i], fakeChainCtx, &antsWG)
 				PureExecutionCost += time.Since(execst)
+				fmt.Println("exec time:", time.Since(execst))
 
-				antsWG.Add(len(groups[round]))
 				mergest := time.Now()
 				utils.MergeToCacheStateConcurrent(antsPool, cacheStates, fullcache, &antsWG)
 				PureMergeCost += time.Since(mergest)
@@ -446,17 +438,16 @@ func ExecWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBackend ethState
 				// here we can add logic if len(groups[round]) if less than a threshold
 
 				// Create groups to execute
-				antsWG.Add(len(groups[round]))
+				fmt.Println("parallel exec and commit:", len(groups[round]))
 				prefst := time.Now()
 				txsToExec, cacheStates := utils.GenerateTxsAndCacheStatesWithAnts(antsPool, fullcache, groups[round], txs[i], predictRWSets[i], &antsWG)
 				PurePrefetchCost += time.Since(prefst)
 
-				antsWG.Add(len(groups[round]))
 				execst := time.Now()
 				tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, headers[i], fakeChainCtx, &antsWG)
 				PureExecutionCost += time.Since(execst)
+				fmt.Println("exec time:", time.Since(execst))
 
-				antsWG.Add(len(groups[round]))
 				mergest := time.Now()
 				utils.MergeToCacheStateConcurrent(antsPool, cacheStates, fullcache, &antsWG)
 				PureMergeCost += time.Since(mergest)
@@ -498,31 +489,29 @@ func ExecAriaMultiRoundWithConcurrentState(chainDB ethdb.Database, sdbBackend et
 			PurePrefetchCost := time.Duration(0)
 			PureMergeCost := time.Duration(0)
 
-			txList := txs[i]
-			txListIndex := make([]int, len(txList)) // global index for identify the tx, predictList and trueList
-			for j := 0; j < len(txList); j++ {
+			txListIndex := make([]int, len(txs[i])) // global index for identify the tx, predictList and trueList
+			for j := 0; j < len(txs[i]); j++ {
 				txListIndex[j] = j
 			}
 
 			// make a fullcache containing both predictList and trueList
-			trueRWlists, _ := testfunc.TrueRWSets(txList, chainDB, sdbBackend, startNum+uint64(i))
+			trueRWlists, _ := testfunc.TrueRWSets(txs[i], chainDB, sdbBackend, startNum+uint64(i))
 			fullcache := interactState.NewFullCacheConcurrent()
 			fullcache.Prefetch(state, trueRWlists)
 			fullcache.Prefetch(state, predictRWSets[i])
 
 			for {
-
-				rwSetList := make([]accesslist.RWSetList, txList.Len())
-				for j := 0; j < txList.Len(); j++ {
-					rwSetList[j] = accesslist.RWSetList{predictRWSets[i][txListIndex[j]], trueRWlists[txListIndex[j]]}
+				fmt.Println("Execute Parallel:", len(txListIndex))
+				rwSetList := make([]accesslist.RWSetList, len(txListIndex))
+				for j, index := range txListIndex {
+					rwSetList[j] = accesslist.RWSetList{predictRWSets[i][index], trueRWlists[index]}
 				}
 				prefetchSt := time.Now()
-				antsWG.Add(txList.Len())
 				cacheStates := utils.GenerateCacheStatesConcurrent(antsPool, fullcache, rwSetList, &antsWG)
 				PurePrefetchCost = PurePrefetchCost + time.Since(prefetchSt)
 
-				snapshots := make([]*interactState.FullState, txList.Len())
-				for j := 0; j < txList.Len(); j++ {
+				snapshots := make([]*interactState.FullState, len(txListIndex))
+				for j := 0; j < len(txListIndex); j++ {
 					snapshots[j] = interactState.NewFullState(cacheStates[j])
 				}
 
@@ -530,45 +519,42 @@ func ExecAriaMultiRoundWithConcurrentState(chainDB ethdb.Database, sdbBackend et
 				writeReserve := accesslist.NewReserveSet()
 
 				execSt := time.Now()
-				errs := tracer.ExecWithSnapshotState(antsPool, txList, snapshots, headers[i], fakeChainCtx, &antsWG, readReserve, writeReserve)
+				errs := tracer.ExecWithSnapshotState(antsPool, txs[i], txListIndex, snapshots, headers[i], fakeChainCtx, &antsWG, readReserve, writeReserve)
 				PureExecutionCost = PureExecutionCost + time.Since(execSt)
+				fmt.Println("Exec Time:", time.Since(execSt))
 
 				canCommit := make([]int, 0)       // contains j in local
 				nextTxlistIndex := make([]int, 0) // contains index in global
-				nextTxlist := make(types.Transactions, 0)
 
-				for j := 0; j < txList.Len(); j++ {
+				for j, index := range txListIndex {
 					if errs[j] != nil {
 						fmt.Println(errs[j])
 					}
-					if writeReserve.HasConflict(uint(j), snapshots[j].GetRWSet().WriteSet) { // WAW
-						nextTxlistIndex = append(nextTxlistIndex, txListIndex[j])
-						nextTxlist = append(nextTxlist, txList[j])
+					if writeReserve.HasConflict(uint(index), snapshots[j].GetRWSet().WriteSet) { // WAW
+						nextTxlistIndex = append(nextTxlistIndex, index)
 						continue
 					}
-					if !readReserve.HasConflict(uint(j), snapshots[j].GetRWSet().WriteSet) || !writeReserve.HasConflict(uint(j), snapshots[j].GetRWSet().ReadSet) {
+					if !readReserve.HasConflict(uint(index), snapshots[j].GetRWSet().WriteSet) || !writeReserve.HasConflict(uint(index), snapshots[j].GetRWSet().ReadSet) {
 						if errs[j] == nil {
-							canCommit = append(canCommit, j)
+							canCommit = append(canCommit, j) // specify which snapshot can be merged into fullcache
 						} else {
-							nextTxlistIndex = append(nextTxlistIndex, txListIndex[j])
-							nextTxlist = append(nextTxlist, txList[j])
+							nextTxlistIndex = append(nextTxlistIndex, index)
 						}
 					}
 				}
 
+				fmt.Println("Can Commit:", len(canCommit))
 				commitCacheStates := make(interactState.CacheStateList, len(canCommit))
 				for k, j := range canCommit {
 					commitCacheStates[k] = snapshots[j].GetStateDB().(*interactState.CacheState)
 				}
 
 				mergeSt := time.Now()
-				antsWG.Add(len(canCommit))
 				utils.MergeToCacheStateConcurrent(antsPool, commitCacheStates, fullcache, &antsWG)
 				PureMergeCost = PureMergeCost + time.Since(mergeSt)
 
-				txList = nextTxlist
 				txListIndex = nextTxlistIndex
-				if len(txList) == 0 {
+				if len(txListIndex) == 0 {
 					break
 				}
 			}
@@ -602,6 +588,7 @@ func main() {
 	// fmt.Println()
 	// ExecWithDegreeZeroConcurrentCacheState(chainDB, sdbBackend, num, num)
 	// fmt.Println()
-	// ExecWithMISConcurrentCacheState(chainDB, sdbBackend, num, num)
-	ExecAriaMultiRoundWithConcurrentState(chainDB, sdbBackend, num, num)
+	ExecWithMISConcurrentCacheState(chainDB, sdbBackend, num, num)
+	// fmt.Println()
+	// ExecAriaMultiRoundWithConcurrentState(chainDB, sdbBackend, num, num)
 }

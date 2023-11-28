@@ -158,6 +158,7 @@ func GenerateCacheStates(db vm.StateDB, RWSetsGroups []accesslist.RWSetList) int
 
 func GenerateCacheStatesConcurrent(pool *ants.Pool, db vm.StateDB, RWSetsGroups []accesslist.RWSetList, wg *sync.WaitGroup) interactState.CacheStateList {
 	cacheStates := make([]*interactState.CacheState, len(RWSetsGroups))
+	wg.Add(len(RWSetsGroups))
 	for i := 0; i < len(RWSetsGroups); i++ {
 		if RWSetsGroups[i] == nil {
 			wg.Done()
@@ -181,6 +182,7 @@ func GenerateCacheStatesConcurrent(pool *ants.Pool, db vm.StateDB, RWSetsGroups 
 func GenerateTxsAndCacheStatesWithAnts(pool *ants.Pool, db *interactState.FullCacheConcurrent, group []uint, txs types.Transactions, predictList accesslist.RWSetList, wg *sync.WaitGroup) (types.Transactions, interactState.CacheStateList) {
 	txsToExec := make(types.Transactions, len(group))
 	cacheStates := make([]*interactState.CacheState, len(group))
+	wg.Add(len(group))
 	for i := 0; i < len(group); i++ {
 		index := i
 		txid := group[index]
