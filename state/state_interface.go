@@ -7,10 +7,10 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 )
 
-type State interface {
+type StateInterface interface {
 	vm.StateDB
 	SetBalance(common.Address, *big.Int)
 	SetTxContext(common.Hash, int)
 }
 
-type StateList []State
+type StateList []StateInterface

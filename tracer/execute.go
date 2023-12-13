@@ -6,10 +6,7 @@ import (
 	"interact/core"
 	"interact/state"
 	"sync"
-	"time"
 
-	"github.com/alitto/pond"
-	"github.com/devchat-ai/gopool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
@@ -17,7 +14,7 @@ import (
 )
 
 // This function execute without generating tracer.list
-func executeTx(statedb vm.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext, evm *vm.EVM) error {
+func executeTx(statedb state.StateInterface, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext, evm *vm.EVM) error {
 	msg, err := core.TransactionToMessage(tx, types.LatestSigner(params.MainnetChainConfig), header.BaseFee)
 
 	if err != nil {
@@ -37,6 +34,7 @@ func executeTx(statedb vm.StateDB, tx *types.Transaction, header *types.Header, 
 	}
 
 	switch statedb.(type) {
+
 	case *state.CacheState:
 		if !statedb.(*state.CacheState).StateJudge {
 			statedb.(*state.CacheState).StateJudge = true
@@ -44,6 +42,21 @@ func executeTx(statedb vm.StateDB, tx *types.Transaction, header *types.Header, 
 			statedb.RevertToSnapshot(snapshot)
 			return ErrFalsePredict
 		}
+
+	case *state.StateWithRwSets:
+		innerState := statedb.(*state.StateWithRwSets).GetStateDB()
+		switch innerState.(type) {
+		case *state.CacheState:
+			if !innerState.(*state.CacheState).StateJudge {
+				innerState.(*state.CacheState).StateJudge = true
+				// This error means the prediction is false, and the transaction should be reverted
+				statedb.RevertToSnapshot(snapshot)
+				return ErrFalsePredict
+			}
+		default:
+			break
+		}
+
 	default:
 		break
 	}
@@ -52,7 +65,7 @@ func executeTx(statedb vm.StateDB, tx *types.Transaction, header *types.Header, 
 }
 
 // ExecuteTxs a batch of transactions in a single atomic state transition.
-func ExecuteTxs(sdb vm.StateDB, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) []error {
+func ExecuteTxs(sdb state.StateInterface, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) []error {
 	evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, sdb, params.MainnetChainConfig, vm.Config{})
 	errs := make([]error, len(txs))
 	for i, tx := range txs {
@@ -60,24 +73,6 @@ func ExecuteTxs(sdb vm.StateDB, txs []*types.Transaction, header *types.Header, 
 		errs[i] = executeTx(sdb, tx, header, chainCtx, evm)
 	}
 	return errs
-}
-
-// Execute with GoPool with cacheState
-func ExecuteWithGopoolCacheState(pool gopool.GoPool, txsGroups []types.Transactions, CacheStates []*state.CacheState, header *types.Header, chainCtx core.ChainContext) {
-	// Add tasks to the pool
-	// !!! Gopool will costs 50ms to do the scheduling !!!
-	// st := time.Now()
-	for j := 0; j < len(txsGroups); j++ {
-		taskNum := j
-		pool.AddTask(func() (interface{}, error) {
-			st := time.Now()
-			err := ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
-			fmt.Println(err)
-			return time.Since(st), nil
-		})
-	}
-	pool.Wait()
-	// fmt.Println("Execute Costs:", time.Since(st))
 }
 
 type ParameterForTxGroup struct {
@@ -149,7 +144,7 @@ func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactio
 
 // txs is the whole transactions of a block
 // txsIndex speicifies the index of transactions to be executed
-func ExecWithSnapshotState(pool *ants.Pool, txs types.Transactions, txsIndex []int, snapshots []*state.FullState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup, readReserve, writeReserve *accesslist.ReserveSet) []error {
+func ExecWithSnapshotState(pool *ants.Pool, txs types.Transactions, txsIndex []int, snapshots []*state.StateWithRwSets, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup, readReserve, writeReserve *accesslist.ReserveSet) []error {
 	errs := make([]error, len(txsIndex))
 	wg.Add(len(txsIndex))
 	for i := 0; i < len(txsIndex); i++ {
@@ -172,23 +167,4 @@ func ExecWithSnapshotState(pool *ants.Pool, txs types.Transactions, txsIndex []i
 	}
 	wg.Wait()
 	return errs
-}
-
-// Execute with pond Pool with cacheState
-func ExecuteWithPondCacheState(pool *pond.WorkerPool, txsGroups []types.Transactions, CacheStates []*state.CacheState, header *types.Header, chainCtx core.ChainContext) {
-	// Iterate over the txsGroups
-	for j := 0; j < len(txsGroups); j++ {
-		taskNum := j
-
-		// Submit tasks to the pond pool
-		pool.Submit(func() {
-			st := time.Now()
-			ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
-			// fmt.Println(err)
-			executionTime := time.Since(st)
-			fmt.Println("Execution time:", executionTime)
-		})
-	}
-
-	pool.StopAndWait()
 }

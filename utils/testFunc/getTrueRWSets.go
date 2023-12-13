@@ -21,7 +21,7 @@ func TrueRWSets(txs types.Transactions, chainDB ethdb.Database, sdbBackend ethSt
 	if err != nil {
 		return nil, err
 	}
-	fulldb := interactState.NewFullState(state)
+	fulldb := interactState.NewStateWithRwSets(state)
 
 	headHash := rawdb.ReadCanonicalHash(chainDB, num)
 	header := rawdb.ReadHeader(chainDB, headHash, num)

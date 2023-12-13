@@ -472,7 +472,7 @@ func (s *CacheState) prefetchSetter(addr common.Address, hash common.Hash, state
 }
 
 // ! we can use write set to optimize the merge process
-func (s *CacheState) MergeState(statedb State) {
+func (s *CacheState) MergeState(statedb StateInterface) {
 	for addr := range s.Journal.dirties {
 		aoj := s.getAccountObject(addr)
 		statedb.SetBalance(addr, aoj.GetBalance())

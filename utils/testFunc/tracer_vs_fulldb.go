@@ -27,7 +27,7 @@ func CompareTracerAndFulldb(chainDB ethdb.Database, sdbBackend ethState.Database
 	fmt.Println("Tx Hash:", tx.Hash().Hex())
 	tracerPredict, _ := tracer.PredictWithTracer(baseState.Copy(), tx, header, fakeChainCtx)
 
-	fulldb := interactState.NewFullState(baseState.Copy())
+	fulldb := interactState.NewStateWithRwSets(baseState.Copy())
 	fullStatePredict, _ := tracer.ExecToGenerateRWSet(fulldb, tx, header, fakeChainCtx)
 
 	jsonfile, _ := os.Create("tracer.json")

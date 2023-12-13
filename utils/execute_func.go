@@ -9,7 +9,7 @@ import (
 )
 
 // MergeToState merge all cacheState to fullstate.State
-func MergeToState(cacheStates state.CacheStateList, db state.State) {
+func MergeToState(cacheStates state.CacheStateList, db state.StateInterface) {
 	for i := 0; i < len(cacheStates); i++ {
 		cacheStates[i].MergeState(db)
 	}

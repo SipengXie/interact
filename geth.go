@@ -25,6 +25,21 @@ func ExecSerial(chainDB ethdb.Database, sdbBackend ethState.Database, startNum, 
 
 	txs, _, headers := utils.GetTxsPredictsAndHeaders(chainDB, sdbBackend, startNum, endNum)
 
+	trueRWlists, _ := testfunc.TrueRWSets(txs[0], chainDB, sdbBackend, startNum)
+	totalRWSet := make(accesslist.ALTuple)
+	for _, rwset := range trueRWlists {
+		for addr, state := range rwset.ReadSet {
+			for hash := range state {
+				totalRWSet.Add(addr, hash)
+			}
+		}
+		for addr, state := range rwset.WriteSet {
+			for hash := range state {
+				totalRWSet.Add(addr, hash)
+			}
+		}
+	}
+	fmt.Println("Total Slots:", len(totalRWSet))
 	{
 		// get statedb from block[startNum-1].Root
 		state, err := utils.GetState(chainDB, sdbBackend, startNum-1)
@@ -376,7 +391,7 @@ func ExecWithDegreeZeroConcurrentCacheState(chainDB ethdb.Database, sdbBackend e
 			PureMergeCost := time.Duration(0)
 			for round := 0; round < len(groups); round++ {
 				// here we can add logic if len(groups[round]) if less than a threshold
-				fmt.Println("parallel exec and commit:", len(groups[round]))
+				// fmt.Println("parallel exec and commit:", len(groups[round]))
 				// Create groups to execute
 				prefst := time.Now()
 				txsToExec, cacheStates := utils.GenerateTxsAndCacheStatesWithAnts(antsPool, fullcache, groups[round], txs[i], predictRWSets[i], &antsWG)
@@ -385,7 +400,7 @@ func ExecWithDegreeZeroConcurrentCacheState(chainDB ethdb.Database, sdbBackend e
 				execst := time.Now()
 				tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, headers[i], fakeChainCtx, &antsWG)
 				PureExecutionCost += time.Since(execst)
-				fmt.Println("exec time:", time.Since(execst))
+				// fmt.Println("exec time:", time.Since(execst))
 
 				mergest := time.Now()
 				utils.MergeToCacheStateConcurrent(antsPool, cacheStates, fullcache, &antsWG)
@@ -438,7 +453,7 @@ func ExecWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBackend ethState
 				// here we can add logic if len(groups[round]) if less than a threshold
 
 				// Create groups to execute
-				fmt.Println("parallel exec and commit:", len(groups[round]))
+				// fmt.Println("parallel exec and commit:", len(groups[round]))
 				prefst := time.Now()
 				txsToExec, cacheStates := utils.GenerateTxsAndCacheStatesWithAnts(antsPool, fullcache, groups[round], txs[i], predictRWSets[i], &antsWG)
 				PurePrefetchCost += time.Since(prefst)
@@ -446,7 +461,7 @@ func ExecWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBackend ethState
 				execst := time.Now()
 				tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, headers[i], fakeChainCtx, &antsWG)
 				PureExecutionCost += time.Since(execst)
-				fmt.Println("exec time:", time.Since(execst))
+				// fmt.Println("exec time:", time.Since(execst))
 
 				mergest := time.Now()
 				utils.MergeToCacheStateConcurrent(antsPool, cacheStates, fullcache, &antsWG)
@@ -467,6 +482,7 @@ func ExecWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBackend ethState
 	return nil
 }
 
+// TODO: This Exec Method need to change
 func ExecAriaMultiRoundWithConcurrentState(chainDB ethdb.Database, sdbBackend ethState.Database, startNum, endNum uint64) error {
 	fmt.Println("Aria Method")
 	fakeChainCtx := core.NewFakeChainContext(chainDB)
@@ -510,9 +526,9 @@ func ExecAriaMultiRoundWithConcurrentState(chainDB ethdb.Database, sdbBackend et
 				cacheStates := utils.GenerateCacheStatesConcurrent(antsPool, fullcache, rwSetList, &antsWG)
 				PurePrefetchCost = PurePrefetchCost + time.Since(prefetchSt)
 
-				snapshots := make([]*interactState.FullState, len(txListIndex))
+				snapshots := make([]*interactState.StateWithRwSets, len(txListIndex))
 				for j := 0; j < len(txListIndex); j++ {
-					snapshots[j] = interactState.NewFullState(cacheStates[j])
+					snapshots[j] = interactState.NewStateWithRwSets(cacheStates[j])
 				}
 
 				readReserve := accesslist.NewReserveSet()
@@ -542,8 +558,6 @@ func ExecAriaMultiRoundWithConcurrentState(chainDB ethdb.Database, sdbBackend et
 						}
 					}
 				}
-
-				fmt.Println("Can Commit:", len(canCommit))
 				commitCacheStates := make(interactState.CacheStateList, len(canCommit))
 				for k, j := range canCommit {
 					commitCacheStates[k] = snapshots[j].GetStateDB().(*interactState.CacheState)
@@ -568,6 +582,146 @@ func ExecAriaMultiRoundWithConcurrentState(chainDB ethdb.Database, sdbBackend et
 	return nil
 }
 
+func ExecAriaThenConnectedComponentsWithOneBlock(chainDB ethdb.Database, sdbBackend ethState.Database, height uint64) error {
+	fmt.Println("Aria Method Then Connected Components With One Block")
+	antsPool, _ := ants.NewPool(16, ants.WithPreAlloc(true))
+	defer antsPool.Release()
+	var antsWG sync.WaitGroup
+
+	// execution environment
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
+	block, header := utils.GetBlockAndHeader(chainDB, height)
+	txs := block.Transactions()
+
+	// predict and true used to fetch data from statedb
+	// to construct a state for testing
+	predictRwSets := make([]*accesslist.RWSet, txs.Len())
+	for i, tx := range txs {
+		predictRwSets[i] = utils.PredictRWSets(tx, chainDB, sdbBackend, height)
+	}
+	trueRWlists, _ := testfunc.TrueRWSets(txs, chainDB, sdbBackend, height)
+	state, err := utils.GetState(chainDB, sdbBackend, height-1)
+	if err != nil {
+		return err
+	}
+	fullcache := interactState.NewFullCacheConcurrent()
+	fullcache.Prefetch(state, trueRWlists)
+	fullcache.Prefetch(state, predictRwSets)
+
+	// first we use Aria method to commit txs and get rw sets
+	PrefetchRwSetList := make([]accesslist.RWSetList, len(txs))
+	for i := range txs {
+		PrefetchRwSetList[i] = accesslist.RWSetList{predictRwSets[i], trueRWlists[i]}
+	}
+	restTx, restPredictRwSets := utils.AriaOneRound(antsPool, txs, header, fakeChainCtx, fullcache, PrefetchRwSetList, &antsWG)
+
+	// then we use connected components method to commit the rest txs
+	fmt.Println("Start Connected Components Execution")
+	st := time.Now()
+	txGroup, RwSetGroup := utils.GenerateTxAndRWSetGroups(restTx, restPredictRwSets)
+	cacheStates := utils.GenerateCacheStatesConcurrent(antsPool, fullcache, RwSetGroup, &antsWG)
+	tracer.ExecuteWithAntsPool(antsPool, txGroup, cacheStates, header, fakeChainCtx, &antsWG)
+	utils.MergeToCacheStateConcurrent(antsPool, cacheStates, fullcache, &antsWG)
+	fmt.Println("End Connected Components Execution")
+	fmt.Println("Cost:", time.Since(st))
+
+	return nil
+}
+
+func ExecAriaThenDegreeZeroWithOneBlock(chainDB ethdb.Database, sdbBackend ethState.Database, height uint64) error {
+	fmt.Println("Aria Method Then Degree Zero With One Block")
+	antsPool, _ := ants.NewPool(16, ants.WithPreAlloc(true))
+	defer antsPool.Release()
+	var antsWG sync.WaitGroup
+
+	// execution environment
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
+	block, header := utils.GetBlockAndHeader(chainDB, height)
+	txs := block.Transactions()
+
+	// predict and true used to fetch data from statedb
+	// to construct a state for testing
+	predictRwSets := make([]*accesslist.RWSet, txs.Len())
+	for i, tx := range txs {
+		predictRwSets[i] = utils.PredictRWSets(tx, chainDB, sdbBackend, height)
+	}
+	trueRWlists, _ := testfunc.TrueRWSets(txs, chainDB, sdbBackend, height)
+	state, err := utils.GetState(chainDB, sdbBackend, height-1)
+	if err != nil {
+		return err
+	}
+	fullcache := interactState.NewFullCacheConcurrent()
+	fullcache.Prefetch(state, trueRWlists)
+	fullcache.Prefetch(state, predictRwSets)
+
+	// first we use Aria method to commit txs and get rw sets
+	PrefetchRwSetList := make([]accesslist.RWSetList, len(txs))
+	for i := range txs {
+		PrefetchRwSetList[i] = accesslist.RWSetList{predictRwSets[i], trueRWlists[i]}
+	}
+	restTx, restPredictRwSets := utils.AriaOneRound(antsPool, txs, header, fakeChainCtx, fullcache, PrefetchRwSetList, &antsWG)
+
+	// then we use Degree Zero method to commit the rest txs
+	fmt.Println("Start Degree Zero Execution")
+	st := time.Now()
+	groups := utils.GenerateDegreeZeroGroups(restTx, restPredictRwSets)
+	for round := 0; round < len(groups); round++ {
+		txsToExec, cacheStates := utils.GenerateTxsAndCacheStatesWithAnts(antsPool, fullcache, groups[round], restTx, restPredictRwSets, &antsWG)
+		tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, header, fakeChainCtx, &antsWG)
+		utils.MergeToCacheStateConcurrent(antsPool, cacheStates, fullcache, &antsWG)
+	}
+	fmt.Println("End Degree Zero Execution")
+	fmt.Println("Cost:", time.Since(st))
+	return nil
+}
+
+func ExecAriaThenMISWithOneBlock(chainDB ethdb.Database, sdbBackend ethState.Database, height uint64) error {
+	fmt.Println("Aria Method Then MIS With One Block")
+	antsPool, _ := ants.NewPool(16, ants.WithPreAlloc(true))
+	defer antsPool.Release()
+	var antsWG sync.WaitGroup
+
+	// execution environment
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
+	block, header := utils.GetBlockAndHeader(chainDB, height)
+	txs := block.Transactions()
+
+	// predict and true used to fetch data from statedb
+	// to construct a state for testing
+	predictRwSets := make([]*accesslist.RWSet, txs.Len())
+	for i, tx := range txs {
+		predictRwSets[i] = utils.PredictRWSets(tx, chainDB, sdbBackend, height)
+	}
+	trueRWlists, _ := testfunc.TrueRWSets(txs, chainDB, sdbBackend, height)
+	state, err := utils.GetState(chainDB, sdbBackend, height-1)
+	if err != nil {
+		return err
+	}
+	fullcache := interactState.NewFullCacheConcurrent()
+	fullcache.Prefetch(state, trueRWlists)
+	fullcache.Prefetch(state, predictRwSets)
+
+	// first we use Aria method to commit txs and get rw sets
+	PrefetchRwSetList := make([]accesslist.RWSetList, len(txs))
+	for i := range txs {
+		PrefetchRwSetList[i] = accesslist.RWSetList{predictRwSets[i], trueRWlists[i]}
+	}
+	restTx, restPredictRwSets := utils.AriaOneRound(antsPool, txs, header, fakeChainCtx, fullcache, PrefetchRwSetList, &antsWG)
+
+	// then we use MIS method to commit the rest txs
+	fmt.Println("Start MIS Execution")
+	st := time.Now()
+	groups := utils.GenerateMISGroups(restTx, restPredictRwSets)
+	for round := 0; round < len(groups); round++ {
+		txsToExec, cacheStates := utils.GenerateTxsAndCacheStatesWithAnts(antsPool, fullcache, groups[round], restTx, restPredictRwSets, &antsWG)
+		tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, header, fakeChainCtx, &antsWG)
+		utils.MergeToCacheStateConcurrent(antsPool, cacheStates, fullcache, &antsWG)
+	}
+	fmt.Println("End MIS Execution")
+	fmt.Println("Cost:", time.Since(st))
+	return nil
+}
+
 func main() {
 	Node, chainDB, sdbBackend := utils.GetEthDatabaseAndStateDatabase()
 	defer Node.Close()
@@ -578,17 +732,23 @@ func main() {
 	// just test one block
 	ExecSerial(chainDB, sdbBackend, num, num)
 	fmt.Println()
-	// ExecWithConnectedComponents(chainDB, sdbBackend, num, num)
-	// fmt.Println()
-	// ExecWithDegreeZero(chainDB, sdbBackend, num, num)
-	// fmt.Println()
-	// ExecWithMIS(chainDB, sdbBackend, num, num)
-	// fmt.Println()
-	// ExecWithConnectedComponentsConcurrentCacheState(chainDB, sdbBackend, num, num)
-	// fmt.Println()
-	// ExecWithDegreeZeroConcurrentCacheState(chainDB, sdbBackend, num, num)
-	// fmt.Println()
+	ExecWithConnectedComponents(chainDB, sdbBackend, num, num)
+	fmt.Println()
+	ExecWithDegreeZero(chainDB, sdbBackend, num, num)
+	fmt.Println()
+	ExecWithMIS(chainDB, sdbBackend, num, num)
+	fmt.Println()
+	ExecWithConnectedComponentsConcurrentCacheState(chainDB, sdbBackend, num, num)
+	fmt.Println()
+	ExecWithDegreeZeroConcurrentCacheState(chainDB, sdbBackend, num, num)
+	fmt.Println()
 	ExecWithMISConcurrentCacheState(chainDB, sdbBackend, num, num)
 	// fmt.Println()
 	// ExecAriaMultiRoundWithConcurrentState(chainDB, sdbBackend, num, num)
+	fmt.Println()
+	ExecAriaThenConnectedComponentsWithOneBlock(chainDB, sdbBackend, num)
+	fmt.Println()
+	ExecAriaThenDegreeZeroWithOneBlock(chainDB, sdbBackend, num)
+	fmt.Println()
+	ExecAriaThenMISWithOneBlock(chainDB, sdbBackend, num)
 }

@@ -48,7 +48,7 @@ func addCall(tracer *RW_AccessListsTracer, from, to common.Address, value *big.I
 	}
 }
 
-func PredictWithTracer(statedb vm.StateDB, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RWSet, error) {
+func PredictWithTracer(statedb state.StateInterface, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RWSet, error) {
 	from, _ := types.Sender(types.LatestSigner(params.MainnetChainConfig), tx)
 	var to common.Address = common.Address{}
 	if tx.To() != nil {
@@ -80,7 +80,7 @@ func PredictWithTracer(statedb vm.StateDB, tx *types.Transaction, header *types.
 }
 
 // -------------------------------------------------------
-func ExecToGenerateRWSet(fulldb *state.FullState, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RWSet, error) {
+func ExecToGenerateRWSet(fulldb *state.StateWithRwSets, tx *types.Transaction, header *types.Header, chainCtx core.ChainContext) (*accesslist.RWSet, error) {
 	rwSet := accesslist.NewRWSet()
 	fulldb.SetRWSet(rwSet)
 	evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, fulldb, params.MainnetChainConfig, vm.Config{})
@@ -91,7 +91,7 @@ func ExecToGenerateRWSet(fulldb *state.FullState, tx *types.Transaction, header 
 	return rwSet, nil
 }
 
-func CreateRWSetsWithTransactions(db *state.FullState, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RWSet, []error) {
+func CreateRWSetsWithTransactions(db *state.StateWithRwSets, txs []*types.Transaction, header *types.Header, chainCtx core.ChainContext) ([]*accesslist.RWSet, []error) {
 	ret := make([]*accesslist.RWSet, len(txs))
 	err := make([]error, len(txs))
 	for i, tx := range txs {

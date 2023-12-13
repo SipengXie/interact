@@ -28,7 +28,7 @@ func PredictRWSets(tx *types.Transaction, chainDB ethdb.Database, sdbBackend eth
 	if err != nil {
 		panic(err)
 	}
-	fulldb := interactState.NewFullState(state)
+	fulldb := interactState.NewStateWithRwSets(state)
 
 	headHash := rawdb.ReadCanonicalHash(chainDB, num)
 	header := rawdb.ReadHeader(chainDB, headHash, num)
