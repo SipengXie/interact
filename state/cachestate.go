@@ -83,7 +83,7 @@ func (s *CacheState) GetBalance(addr common.Address) *big.Int {
 	if stateObject != nil {
 		return stateObject.GetBalance()
 	}
-	s.StateJudge = false
+	// s.StateJudge = false
 	return new(big.Int).SetInt64(0)
 }
 
@@ -93,7 +93,7 @@ func (s *CacheState) GetNonce(addr common.Address) uint64 {
 	if stateObject != nil {
 		return stateObject.GetNonce()
 	}
-	s.StateJudge = false
+	// s.StateJudge = false
 	return 0
 }
 
@@ -194,7 +194,7 @@ func (s *CacheState) SubBalance(addr common.Address, amount *big.Int) {
 		return
 	}
 	// fmt.Println("SubBalance:", addr)
-	s.StateJudge = false
+	// s.StateJudge = false
 }
 
 // AddBalance 增加某个账户的余额
@@ -207,7 +207,7 @@ func (s *CacheState) AddBalance(addr common.Address, amount *big.Int) {
 		stateObject.AddBalance(amount)
 		return
 	}
-	s.StateJudge = false
+	// s.StateJudge = false
 }
 
 func (s *CacheState) SetBalance(addr common.Address, amount *big.Int) {
@@ -217,7 +217,7 @@ func (s *CacheState) SetBalance(addr common.Address, amount *big.Int) {
 		stateObject.SetBalance(amount)
 		return
 	}
-	s.StateJudge = false
+	// s.StateJudge = false
 }
 
 func (s *CacheState) setBalancePrefetch(addr common.Address, amount *big.Int) {
@@ -236,7 +236,7 @@ func (s *CacheState) SetNonce(addr common.Address, nonce uint64) {
 		stateObject.SetNonce(nonce)
 		return
 	}
-	s.StateJudge = false
+	// s.StateJudge = false
 }
 
 func (s *CacheState) setNoncePrefetch(addr common.Address, nonce uint64) {

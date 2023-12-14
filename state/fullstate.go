@@ -33,14 +33,14 @@ func (fs *StateWithRwSets) GetRWSet() *accesslist.RWSet {
 
 func (fs *StateWithRwSets) GetBalance(addr common.Address) *big.Int {
 	if fs.rwSets != nil {
-		fs.rwSets.AddReadSet(addr, accesslist.BALANCE)
+		// fs.rwSets.AddReadSet(addr, accesslist.BALANCE)
 	}
 	return fs.stateDB.GetBalance(addr)
 }
 
 func (fs *StateWithRwSets) GetNonce(addr common.Address) uint64 {
 	if fs.rwSets != nil {
-		fs.rwSets.AddReadSet(addr, accesslist.NONCE)
+		// fs.rwSets.AddReadSet(addr, accesslist.NONCE)
 	}
 	return fs.stateDB.GetNonce(addr)
 }
@@ -121,28 +121,28 @@ func (fs *StateWithRwSets) CreateAccount(addr common.Address) {
 
 func (fs *StateWithRwSets) AddBalance(addr common.Address, amount *big.Int) {
 	if fs.rwSets != nil {
-		fs.rwSets.AddWriteSet(addr, accesslist.BALANCE)
+		// fs.rwSets.AddWriteSet(addr, accesslist.BALANCE)
 	}
 	fs.stateDB.AddBalance(addr, amount)
 }
 
 func (fs *StateWithRwSets) SubBalance(addr common.Address, amount *big.Int) {
 	if fs.rwSets != nil {
-		fs.rwSets.AddWriteSet(addr, accesslist.BALANCE)
+		// fs.rwSets.AddWriteSet(addr, accesslist.BALANCE)
 	}
 	fs.stateDB.SubBalance(addr, amount)
 }
 
 func (fs *StateWithRwSets) SetBalance(addr common.Address, amount *big.Int) {
 	if fs.rwSets != nil {
-		fs.rwSets.AddWriteSet(addr, accesslist.BALANCE)
+		// fs.rwSets.AddWriteSet(addr, accesslist.BALANCE)
 	}
 	fs.stateDB.SetBalance(addr, amount)
 }
 
 func (fs *StateWithRwSets) SetNonce(addr common.Address, nonce uint64) {
 	if fs.rwSets != nil {
-		fs.rwSets.AddWriteSet(addr, accesslist.NONCE)
+		// fs.rwSets.AddWriteSet(addr, accesslist.NONCE)
 	}
 	fs.stateDB.SetNonce(addr, nonce)
 }

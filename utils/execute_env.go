@@ -67,6 +67,20 @@ func generateVertexGroups(txs types.Transactions, predictRWSets []*accesslist.RW
 	return groups
 }
 
+func GetTxsPredictsAndHeadersForOneBlock(chainDB ethdb.Database, sdbBackend ethState.Database, height uint64) (types.Transactions, accesslist.RWSetList, *types.Header, core.ChainContext) {
+	fakeChainCtx := core.NewFakeChainContext(chainDB)
+	block, header := GetBlockAndHeader(chainDB, height)
+	txs := block.Transactions()
+
+	// predict and true used to fetch data from statedb
+	// to construct a state for testing
+	predictRwSets := make([]*accesslist.RWSet, txs.Len())
+	for i, tx := range txs {
+		predictRwSets[i] = PredictRWSets(tx, chainDB, sdbBackend, height)
+	}
+	return txs, predictRwSets, header, fakeChainCtx
+}
+
 func GetTxsPredictsAndHeaders(chainDB ethdb.Database, sdbBackend ethState.Database, startNum, endNum uint64) ([]types.Transactions, []accesslist.RWSetList, []*types.Header) {
 	// Try to expand transaction lists
 	txs := make([]types.Transactions, endNum-startNum+1)

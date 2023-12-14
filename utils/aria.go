@@ -38,10 +38,9 @@ func AriaOneRound(antsPool *ants.Pool, txs types.Transactions, header *types.Hea
 	commitStates := make(interactState.CacheStateList, 0)
 
 	for i, tx := range txs {
-		if errs[i] != nil {
+		if errs[i] != nil && errs[i] != tracer.ErrFalsePredict {
 			// here must occur logic error
 			// so we must deal it next time
-			fmt.Println(errs[i])
 			restTx = append(restTx, tx)
 			restPredictRwSets = append(restPredictRwSets, snapshots[i].GetRWSet())
 

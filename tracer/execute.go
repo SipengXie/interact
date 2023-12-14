@@ -106,12 +106,13 @@ func ExecuteWithAntsCacheState(pool *ants.PoolWithFunc, txsGroups []types.Transa
 }
 
 // Execute with ants Pool with cacheState
-func ExecuteWithAntsPool(pool *ants.Pool, txsGroups []types.Transactions, CacheStates state.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
+func ExecuteWithAntsPool(pool *ants.Pool, txsGroups []types.Transactions, CacheStates state.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) [][]error {
 	wg.Add(len(txsGroups))
+	errss := make([][]error, len(txsGroups))
 	for j := 0; j < len(txsGroups); j++ {
 		taskNum := j
 		err := pool.Submit(func() {
-			ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
+			errss[taskNum] = ExecuteTxs(CacheStates[taskNum], txsGroups[taskNum], header, chainCtx)
 			wg.Done() // Mark the task as completed
 		})
 		if err != nil {
@@ -121,17 +122,25 @@ func ExecuteWithAntsPool(pool *ants.Pool, txsGroups []types.Transactions, CacheS
 	}
 	// Wait for all tasks to complete
 	wg.Wait()
+	return errss
 }
 
 // Concurrently execute single transaction, rather than transaction groups
-func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactions, CacheStates []*state.CacheState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
+func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactions, CacheStates []*state.CacheState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) ([]error, accesslist.RWSetList) {
 	wg.Add(len(txs))
+	errs := make([]error, txs.Len())
+	rwsets := make([]*accesslist.RWSet, txs.Len())
 	for i := 0; i < len(txs); i++ {
 		taskNum := i
-		evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, CacheStates[taskNum], params.MainnetChainConfig, vm.Config{})
+		stateWithRwsets := state.NewStateWithRwSets(CacheStates[taskNum])
+		rwSet := accesslist.NewRWSet()
+		stateWithRwsets.SetRWSet(rwSet)
+		evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, stateWithRwsets, params.MainnetChainConfig, vm.Config{})
+
 		// Submit tasks to the ants pool
 		err := pool.Submit(func() {
-			executeTx(CacheStates[taskNum], txs[taskNum], header, chainCtx, evm)
+			errs[taskNum] = executeTx(stateWithRwsets, txs[taskNum], header, chainCtx, evm)
+			rwsets[taskNum] = rwSet
 			wg.Done() // Mark the task as completed
 		})
 		if err != nil {
@@ -140,6 +149,7 @@ func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactio
 		}
 	}
 	wg.Wait()
+	return errs, rwsets
 }
 
 // txs is the whole transactions of a block
