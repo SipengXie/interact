@@ -324,10 +324,10 @@ func (s *FullCacheConcurrent) Snapshot() int {
 
 // AddLog
 func (s *FullCacheConcurrent) AddLog(log *types.Log) {
-	log.TxHash = s.thash
-	log.TxIndex = uint(s.txIndex)
-	log.Index = s.logSize
-	s.Logs[s.thash] = append(s.Logs[s.thash], log)
+	// log.TxHash = s.thash
+	// log.TxIndex = uint(s.txIndex)
+	// log.Index = s.logSize
+	// s.Logs[s.thash] = append(s.Logs[s.thash], log)
 }
 
 // AddPreimage

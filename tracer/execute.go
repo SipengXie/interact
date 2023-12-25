@@ -106,7 +106,7 @@ func ExecuteWithAntsCacheState(pool *ants.PoolWithFunc, txsGroups []types.Transa
 }
 
 // Execute with ants Pool with cacheState
-func ExecuteWithAntsPool(pool *ants.Pool, txsGroups []types.Transactions, CacheStates state.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) [][]error {
+func ExecConflictedTxs(pool *ants.Pool, txsGroups []types.Transactions, CacheStates state.CacheStateList, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) [][]error {
 	wg.Add(len(txsGroups))
 	errss := make([][]error, len(txsGroups))
 	for j := 0; j < len(txsGroups); j++ {
@@ -125,8 +125,24 @@ func ExecuteWithAntsPool(pool *ants.Pool, txsGroups []types.Transactions, CacheS
 	return errss
 }
 
-// Concurrently execute single transaction, rather than transaction groups
-func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactions, CacheStates []*state.CacheState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) ([]error, accesslist.RWSetList) {
+func ExecuteWithCCFullState(pool *ants.Pool, txs types.Transactions, fullstate *state.FullCacheConcurrent, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) {
+	wg.Add(len(txs))
+	for i := 0; i < len(txs); i++ {
+		taskNum := i
+		evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, fullstate, params.MainnetChainConfig, vm.Config{})
+		err := pool.Submit(func() {
+			executeTx(fullstate, txs[taskNum], header, chainCtx, evm)
+			wg.Done() // Mark the task as completed
+		})
+		if err != nil {
+			fmt.Println("Error submitting task to ants pool:", err)
+			wg.Done() // Mark the task as completed
+		}
+	}
+	wg.Wait()
+}
+
+func ExecConflictFreeTxsGeneratingRwSets(pool *ants.Pool, txs types.Transactions, CacheStates []*state.CacheState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) ([]error, accesslist.RWSetList) {
 	wg.Add(len(txs))
 	errs := make([]error, txs.Len())
 	rwsets := make([]*accesslist.RWSet, txs.Len())
@@ -150,6 +166,28 @@ func ExecuteWithAntsCacheStateRoundByRound(pool *ants.Pool, txs types.Transactio
 	}
 	wg.Wait()
 	return errs, rwsets
+}
+
+// Concurrently execute single transaction, rather than transaction groups
+func ExecConflictFreeTxs(pool *ants.Pool, txs types.Transactions, CacheStates []*state.CacheState, header *types.Header, chainCtx core.ChainContext, wg *sync.WaitGroup) []error {
+	wg.Add(len(txs))
+	errs := make([]error, txs.Len())
+	for i := 0; i < len(txs); i++ {
+		taskNum := i
+		evm := vm.NewEVM(core.NewEVMBlockContext(header, chainCtx, &header.Coinbase), vm.TxContext{}, CacheStates[taskNum], params.MainnetChainConfig, vm.Config{})
+
+		// Submit tasks to the ants pool
+		err := pool.Submit(func() {
+			errs[taskNum] = executeTx(CacheStates[taskNum], txs[taskNum], header, chainCtx, evm)
+			wg.Done() // Mark the task as completed
+		})
+		if err != nil {
+			fmt.Println("Error submitting task to ants pool:", err)
+			wg.Done() // Mark the task as completed
+		}
+	}
+	wg.Wait()
+	return errs
 }
 
 // txs is the whole transactions of a block

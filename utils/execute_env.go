@@ -193,6 +193,14 @@ func GenerateCacheStatesConcurrent(pool *ants.Pool, db vm.StateDB, RWSetsGroups 
 	return cacheStates
 }
 
+func GenerateTxToExec(group []uint, txs types.Transactions) types.Transactions {
+	txsToExec := make(types.Transactions, len(group))
+	for i := 0; i < len(group); i++ {
+		txsToExec[i] = txs[group[i]]
+	}
+	return txsToExec
+}
+
 func GenerateTxsAndCacheStatesWithAnts(pool *ants.Pool, db *interactState.FullCacheConcurrent, group []uint, txs types.Transactions, predictList accesslist.RWSetList, wg *sync.WaitGroup) (types.Transactions, interactState.CacheStateList) {
 	txsToExec := make(types.Transactions, len(group))
 	cacheStates := make([]*interactState.CacheState, len(group))

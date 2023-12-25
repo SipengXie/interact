@@ -196,7 +196,7 @@ func ExecWithDegreeZero(chainDB ethdb.Database, sdbBackend ethState.Database, st
 					cacheStates[index] = cacheForOneTx
 				}
 				execst := time.Now()
-				tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, headers[i], fakeChainCtx, &antsWG)
+				tracer.ExecConflictFreeTxs(antsPool, txsToExec, cacheStates, headers[i], fakeChainCtx, &antsWG)
 				PureExecutionCost += time.Since(execst)
 
 				mergest := time.Now()
@@ -267,7 +267,7 @@ func ExecWithMIS(chainDB ethdb.Database, sdbBackend ethState.Database, startNum,
 					cacheStates[index] = cacheForOneTx
 				}
 				execst := time.Now()
-				tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, headers[i], fakeChainCtx, &antsWG)
+				tracer.ExecConflictFreeTxs(antsPool, txsToExec, cacheStates, headers[i], fakeChainCtx, &antsWG)
 				PureExecutionCost += time.Since(execst)
 
 				mergest := time.Now()
@@ -418,7 +418,7 @@ func ExecWithConnectedComponentsConcurrentCacheState(chainDB ethdb.Database, sdb
 	PurePrefetchCost = time.Since(startPrefetch)
 
 	start = time.Now()
-	tracer.ExecuteWithAntsPool(antsPool, txGroupsList, cacheStates, header, fakeChainCtx, &antsWG)
+	tracer.ExecConflictedTxs(antsPool, txGroupsList, cacheStates, header, fakeChainCtx, &antsWG)
 	PureExecutionCost = time.Since(start)
 
 	startMerge := time.Now()
@@ -467,7 +467,7 @@ func ExecWithDegreeZeroConcurrentCacheState(chainDB ethdb.Database, sdbBackend e
 		PurePrefetchCost += time.Since(prefst)
 
 		execst := time.Now()
-		tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, header, fakeChainCtx, &antsWG)
+		tracer.ExecConflictFreeTxs(antsPool, txsToExec, cacheStates, header, fakeChainCtx, &antsWG)
 		PureExecutionCost += time.Since(execst)
 		mergest := time.Now()
 		utils.MergeToCacheStateConcurrent(antsPool, cacheStates, fullcache, &antsWG)
@@ -518,7 +518,7 @@ func ExecWithMISConcurrentCacheState(chainDB ethdb.Database, sdbBackend ethState
 		PurePrefetchCost += time.Since(prefst)
 
 		execst := time.Now()
-		tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, header, fakeChainCtx, &antsWG)
+		tracer.ExecConflictFreeTxs(antsPool, txsToExec, cacheStates, header, fakeChainCtx, &antsWG)
 		PureExecutionCost += time.Since(execst)
 		// fmt.Println("exec time:", time.Since(execst))
 
@@ -567,7 +567,7 @@ func ExecAriaThenConnectedComponentsWithOneBlock(chainDB ethdb.Database, sdbBack
 	st := time.Now()
 	txGroup, RwSetGroup := utils.GenerateTxAndRWSetGroups(restTx, restPredictRwSets)
 	cacheStates := utils.GenerateCacheStatesConcurrent(antsPool, fullcache, RwSetGroup, &antsWG)
-	tracer.ExecuteWithAntsPool(antsPool, txGroup, cacheStates, header, fakeChainCtx, &antsWG)
+	tracer.ExecConflictedTxs(antsPool, txGroup, cacheStates, header, fakeChainCtx, &antsWG)
 	utils.MergeToCacheStateConcurrent(antsPool, cacheStates, fullcache, &antsWG)
 	fmt.Println("End Connected Components Execution")
 	fmt.Println("Cost:", time.Since(st))
@@ -604,7 +604,7 @@ func ExecAriaThenDegreeZeroWithOneBlock(chainDB ethdb.Database, sdbBackend ethSt
 	groups := utils.GenerateDegreeZeroGroups(restTx, restPredictRwSets)
 	for round := 0; round < len(groups); round++ {
 		txsToExec, cacheStates := utils.GenerateTxsAndCacheStatesWithAnts(antsPool, fullcache, groups[round], restTx, restPredictRwSets, &antsWG)
-		tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, header, fakeChainCtx, &antsWG)
+		tracer.ExecConflictFreeTxs(antsPool, txsToExec, cacheStates, header, fakeChainCtx, &antsWG)
 		utils.MergeToCacheStateConcurrent(antsPool, cacheStates, fullcache, &antsWG)
 	}
 	fmt.Println("End Degree Zero Execution")
@@ -642,11 +642,89 @@ func ExecAriaThenMISWithOneBlock(chainDB ethdb.Database, sdbBackend ethState.Dat
 	groups := utils.GenerateMISGroups(restTx, restPredictRwSets)
 	for round := 0; round < len(groups); round++ {
 		txsToExec, cacheStates := utils.GenerateTxsAndCacheStatesWithAnts(antsPool, fullcache, groups[round], restTx, restPredictRwSets, &antsWG)
-		tracer.ExecuteWithAntsCacheStateRoundByRound(antsPool, txsToExec, cacheStates, header, fakeChainCtx, &antsWG)
+		tracer.ExecConflictFreeTxs(antsPool, txsToExec, cacheStates, header, fakeChainCtx, &antsWG)
 		utils.MergeToCacheStateConcurrent(antsPool, cacheStates, fullcache, &antsWG)
 	}
 	fmt.Println("End MIS Execution")
 	fmt.Println("Cost:", time.Since(st))
+	return nil
+}
+
+func ExecWithDegreeZeroConcurrentFullstate(chainDB ethdb.Database, sdbBackend ethState.Database, height uint64) error {
+	fmt.Println("DegreeZero Solution Concurrent Fullstate")
+
+	txs, predictRwSets, header, fakeChainCtx := utils.GetTxsPredictsAndHeadersForOneBlock(chainDB, sdbBackend, height)
+	trueRWlists, _ := testfunc.TrueRWSets(txs, chainDB, sdbBackend, height)
+
+	state, err := utils.GetState(chainDB, sdbBackend, height-1)
+	if err != nil {
+		return err
+	}
+
+	antsPool, _ := ants.NewPool(16, ants.WithPreAlloc(true))
+	defer antsPool.Release()
+	var antsWG sync.WaitGroup
+
+	st := time.Now()
+	groups := utils.GenerateDegreeZeroGroups(txs, predictRwSets)
+	fmt.Println("Generate TxGroups:", time.Since(st))
+	fullcache := interactState.NewFullCacheConcurrent()
+	// here we don't pre warm the data
+	fullcache.Prefetch(state, predictRwSets)
+	fullcache.Prefetch(state, trueRWlists)
+
+	st = time.Now()
+	PureExecutionCost := time.Duration(0)
+	for round := 0; round < len(groups); round++ {
+		txsToExec := utils.GenerateTxToExec(groups[round], txs)
+
+		execst := time.Now()
+		tracer.ExecuteWithCCFullState(antsPool, txsToExec, fullcache, header, fakeChainCtx, &antsWG)
+		PureExecutionCost += time.Since(execst)
+	}
+
+	fmt.Println("Execution Time:", time.Since(st))
+	fmt.Println("PureExecution Time:", PureExecutionCost)
+
+	return nil
+}
+
+func ExecWithMISConcurrentFullstate(chainDB ethdb.Database, sdbBackend ethState.Database, height uint64) error {
+	fmt.Println("MIS Solution Concurrent Fullstate")
+
+	txs, predictRwSets, header, fakeChainCtx := utils.GetTxsPredictsAndHeadersForOneBlock(chainDB, sdbBackend, height)
+	trueRWlists, _ := testfunc.TrueRWSets(txs, chainDB, sdbBackend, height)
+
+	state, err := utils.GetState(chainDB, sdbBackend, height-1)
+	if err != nil {
+		return err
+	}
+
+	antsPool, _ := ants.NewPool(16, ants.WithPreAlloc(true))
+	defer antsPool.Release()
+	var antsWG sync.WaitGroup
+
+	st := time.Now()
+	groups := utils.GenerateMISGroups(txs, predictRwSets)
+	fmt.Println("Generate TxGroups:", time.Since(st))
+	fullcache := interactState.NewFullCacheConcurrent()
+	// here we don't pre warm the data
+	fullcache.Prefetch(state, predictRwSets)
+	fullcache.Prefetch(state, trueRWlists)
+
+	st = time.Now()
+	PureExecutionCost := time.Duration(0)
+	for round := 0; round < len(groups); round++ {
+		txsToExec := utils.GenerateTxToExec(groups[round], txs)
+
+		execst := time.Now()
+		tracer.ExecuteWithCCFullState(antsPool, txsToExec, fullcache, header, fakeChainCtx, &antsWG)
+		PureExecutionCost += time.Since(execst)
+	}
+
+	fmt.Println("Execution Time:", time.Since(st))
+	fmt.Println("PureExecution Time:", PureExecutionCost)
+
 	return nil
 }
 
@@ -660,15 +738,19 @@ func main() {
 	// just test one block
 	ExecSerial(chainDB, sdbBackend, num, num)
 	fmt.Println()
-	ExecWithConnectedComponentsConcurrentCacheState(chainDB, sdbBackend, num)
-	fmt.Println()
-	ExecWithDegreeZeroConcurrentCacheState(chainDB, sdbBackend, num)
-	fmt.Println()
-	ExecWithMISConcurrentCacheState(chainDB, sdbBackend, num)
-	fmt.Println()
-	ExecAriaThenConnectedComponentsWithOneBlock(chainDB, sdbBackend, num)
-	fmt.Println()
-	ExecAriaThenDegreeZeroWithOneBlock(chainDB, sdbBackend, num)
-	fmt.Println()
-	ExecAriaThenMISWithOneBlock(chainDB, sdbBackend, num)
+	// ExecWithConnectedComponentsConcurrentCacheState(chainDB, sdbBackend, num)
+	// fmt.Println()
+	// ExecWithDegreeZeroConcurrentCacheState(chainDB, sdbBackend, num)
+	// fmt.Println()
+	// ExecWithMISConcurrentCacheState(chainDB, sdbBackend, num)
+	// fmt.Println()
+	// ExecAriaThenConnectedComponentsWithOneBlock(chainDB, sdbBackend, num)
+	// fmt.Println()
+	// ExecAriaThenDegreeZeroWithOneBlock(chainDB, sdbBackend, num)
+	// fmt.Println()
+	// ExecAriaThenMISWithOneBlock(chainDB, sdbBackend, num)
+	// fmt.Println()
+	// ExecWithDegreeZeroConcurrentCacheStateWithoutPrefetchAndMerge(chainDB, sdbBackend, num)
+	// fmt.Println()
+	// ExecWithMISConcurrentFullstate(chainDB, sdbBackend, num)
 }
